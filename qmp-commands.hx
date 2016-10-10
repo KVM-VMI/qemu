@@ -467,6 +467,29 @@ Example:
 EQMP
 
     {
+        .name       = "pmemaccess",
+        .args_type  = "path:s",
+        .mhandler.cmd_new = qmp_marshal_input_pmemaccess,
+    },
+
+SQMP
+pmemaccess
+----------
+
+Open A UNIX Socket access to physical memory
+
+Arguments:
+
+- "path": mount point path (json-string)
+
+Example:
+
+-> { "execute": "pmemaccess",
+             "arguments": { "path": "/tmp/guestname" } }
+<- { "return": {} }
+
+EQMP
+    {
         .name       = "inject-nmi",
         .args_type  = "",
         .mhandler.cmd_new = qmp_marshal_input_inject_nmi,
