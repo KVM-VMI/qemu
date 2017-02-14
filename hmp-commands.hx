@@ -819,6 +819,20 @@ Mount guest physical memory image at 'path'
 ETEXI
 
     {
+        .name       = "pmemaccess",
+        .args_type  = "path:s",
+        .params     = "file",
+        .help       = "open A UNIX Socket access to physical memory at 'path'",
+        .mhandler.cmd = hmp_pmemaccess,
+    },
+
+STEXI
+@item pmemaccess @var{file}
+@findex pmemaccess
+Mount guest physical memory image at 'path'
+ETEXI
+
+    {
         .name       = "boot_set",
         .args_type  = "bootdevice:s",
         .params     = "bootdevice",

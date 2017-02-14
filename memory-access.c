@@ -149,37 +149,18 @@ connection_handler (int connection_fd)
 static void *
 memory_access_thread (void *p)
 {
-    struct sockaddr_un address;
-    int socket_fd, connection_fd;
-    socklen_t address_length;
+    int connection_fd;
     struct pmemaccess_args *pargs = (struct pmemaccess_args *)p;
 
-    socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
-    if (socket_fd < 0){
-	error_setg(pargs->errp, "Qemu pmemaccess: socket failed");
-        goto error_exit;
-    }
-    unlink(pargs->path);
-    address.sun_family = AF_UNIX;
-    address_length = sizeof(address.sun_family) + sprintf(address.sun_path, "%s", (char *) pargs->path);
-
-    if (bind(socket_fd, (struct sockaddr *) &address, address_length) != 0){
-	error_setg(pargs->errp, "Qemu pmemaccess: bind failed");
-        goto error_exit;
-    }
-    if (listen(socket_fd, 0) != 0){
-	error_setg(pargs->errp, "Qemu pmemaccess: listen failed");
-        goto error_exit;
-    }
-
-    connection_fd = accept(socket_fd, (struct sockaddr *) &address, &address_length);
+    // accept incoming connections
+    connection_fd = accept(pargs->socket_fd, (struct sockaddr *) pargs->address, &(pargs->address_length));
     connection_handler(connection_fd);
 
-    close(socket_fd);
+    close(pargs->socket_fd);
     unlink(pargs->path);
     free(pargs->path);
+    free(pargs->address);
     free(pargs);
-error_exit:
     return NULL;
 }
 
@@ -192,15 +173,49 @@ qmp_pmemaccess (const char *path, Error **errp)
 
     // create the args struct
     pargs = (struct pmemaccess_args *) malloc(sizeof(struct pmemaccess_args));
+    if (pargs == NULL){
+        error_setg(errp, "Qemu pmemaccess: malloc failed");
+        return;
+    }
+
     pargs->errp = errp;
     // create a copy of path that we can safely use
-    pargs->path = malloc(strlen(path) + 1);
-    memcpy(pargs->path, path, strlen(path) + 1);
-	
+    size_t path_size = strlen(path);
+    pargs->path = malloc(path_size + 1);
+    memcpy(pargs->path, path, path_size);
+    pargs->path[path_size] = '\0';
+
+    // create socket
+    pargs->socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+    if (pargs->socket_fd < 0){
+        error_setg(pargs->errp, "Qemu pmemaccess: socket failed");
+        return;
+    }
+    // unlink path if already exists
+    unlink(path);
+    // bind socket
+    pargs->address = malloc(sizeof(struct sockaddr_un));
+    if (pargs->address == NULL){
+        error_setg(pargs->errp, "Qemu pmemaccess: malloc failed");
+        return;
+    }
+    pargs->address->sun_family = AF_UNIX;
+    pargs->address_length = sizeof(pargs->address->sun_family) + sprintf(pargs->address->sun_path, "%s", (char *) pargs->path);
+    if (bind(pargs->socket_fd, (struct sockaddr *) pargs->address, pargs->address_length) != 0){
+        printf("could not bind\n");
+        error_setg(pargs->errp, "Qemu pmemaccess: bind failed");
+        return;
+    }
+
+    // listen
+    if (listen(pargs->socket_fd, 0) != 0){
+        error_setg(pargs->errp, "Qemu pmemaccess: listen failed");
+        return;
+    }
+
     // start the thread
     sigfillset(&set);
     pthread_sigmask(SIG_SETMASK, &set, &oldset);
     pthread_create(&thread, NULL, memory_access_thread, pargs);
     pthread_sigmask(SIG_SETMASK, &oldset, NULL);
-
 }
