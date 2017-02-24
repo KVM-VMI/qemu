@@ -1679,6 +1679,34 @@
   'data': {'val': 'int', 'size': 'int', 'filename': 'str'} }
 
 ##
+# @pmemaccess:
+#
+# Open A UNIX Socket access to physical memory
+#
+# @path: the name of the UNIX socket pipe
+#
+# Returns: Nothing on success
+#
+# Since: 2.4.0.1
+#
+# Notes: Derived from previously existing patches. When command
+# succeeds connect to the open socket. Write a binary structure to
+# the socket as:
+#
+# struct request {
+#     uint8_t type;   // 0 quit, 1 read, 2 write, ... rest reserved
+#     uint64_t address;   // address to read from OR write to
+#     uint64_t length;    // number of bytes to read OR write
+# };
+#
+# If it is a read operation, Qemu will return lenght+1 bytes. Read lenght+1
+# bytes. the last byte will be a 1 for success, or a 0 for failure.
+#
+##
+{ 'command': 'pmemaccess',
+  'data': {'path': 'str'} }
+
+##
 # @cont:
 #
 # Resume guest VCPU execution.

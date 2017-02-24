@@ -3822,3 +3822,18 @@ Example for pc machine type started with
             "props": {"core-id": 0, "socket-id": 0, "thread-id": 0}
          }
        ]}
+
+
+pmemaccess
+----------
+
+open A UNIX Socket access to physical memory at 'path'
+
+Arguments:
+
+- "file": force ejection (json-string, required)
+
+Example:
+
+-> { "execute": "pmemaccess", "arguments": { "file": "/tmp/dKtrhM39cC.sock" } }
+<- { "return": {} }
