@@ -132,7 +132,7 @@ connection_handler (int connection_fd)
         }
         else{
             // unknown command
-            fprintf(stderr, "Qemu pmemaccess: ignoring unknown command (%d)\n", req.type);
+            fprintf(stderr, "Qemu pmemaccess: ignoring unknown command (%" PRIu64 ")\n", req.type);
             char *buf = malloc(1);
             buf[0] = 0;
             nbytes = write(connection_fd, buf, 1);
