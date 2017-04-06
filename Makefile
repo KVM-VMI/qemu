@@ -459,9 +459,13 @@ ifneq (,$(findstring qemu-ga,$(TOOLS)))
 endif
 endif
 
+install-headers:
+	$(INSTALL_DIR) "$(DESTDIR)$(includedir)/qemu"
+	$(INSTALL_DATA) libvmi_request.h "$(DESTDIR)$(includedir)/qemu/libvmi_request.h"
+
 
 install: all $(if $(BUILD_DOCS),install-doc) \
-install-datadir install-localstatedir
+install-datadir install-localstatedir install-headers
 ifneq ($(TOOLS),)
 	$(call install-prog,$(subst qemu-ga,qemu-ga$(EXESUF),$(TOOLS)),$(DESTDIR)$(bindir))
 endif
