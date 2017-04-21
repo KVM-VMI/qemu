@@ -461,7 +461,7 @@ endif
 
 install-headers:
 	$(INSTALL_DIR) "$(DESTDIR)$(includedir)/qemu"
-	$(INSTALL_DATA) libvmi_request.h "$(DESTDIR)$(includedir)/qemu/libvmi_request.h"
+	$(INSTALL_DATA) "$(SRC_PATH)/libvmi_request.h" "$(DESTDIR)$(includedir)/qemu/libvmi_request.h"
 
 
 install: all $(if $(BUILD_DOCS),install-doc) \
