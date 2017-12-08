@@ -1455,6 +1455,14 @@ struct kvm_sev_dbg {
 	__u32 len;
 };
 
+struct kvm_introspection {
+        int fd;
+        __u32 padding;
+        __u32 commands;
+        __u32 events;
+};
+#define KVM_INTROSPECTION      _IOW(KVMIO, 0xff, struct kvm_introspection)
+
 #define KVM_DEV_ASSIGN_ENABLE_IOMMU	(1 << 0)
 #define KVM_DEV_ASSIGN_PCI_2_3		(1 << 1)
 #define KVM_DEV_ASSIGN_MASK_INTX	(1 << 2)
