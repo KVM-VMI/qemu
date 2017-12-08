@@ -335,6 +335,11 @@ static QemuOptsList qemu_accel_opts = {
             .type = QEMU_OPT_STRING,
             .help = "Enable/disable multi-threaded TCG",
         },
+        {
+            .name = "introspection",
+            .type = QEMU_OPT_STRING,
+            .help = "Introspector tool",
+        },
         { /* end of list */ }
     },
 };
@@ -4617,6 +4622,10 @@ int main(int argc, char **argv, char **envp)
 
     if (tcg_enabled()) {
         qemu_tcg_configure(accel_opts, &error_fatal);
+    }
+
+    if (kvm_enabled()) {
+        kvm_configure(accel_opts, &error_fatal);
     }
 
     if (default_net) {

@@ -38,6 +38,7 @@
 #include "qemu/event_notifier.h"
 #include "trace.h"
 #include "hw/irq.h"
+#include "sysemu/vm-introspection.h"
 
 #include "hw/boards.h"
 
@@ -103,6 +104,7 @@ struct KVMState
 #endif
     KVMMemoryListener memory_listener;
     QLIST_HEAD(, KVMParkedVcpu) kvm_parked_vcpus;
+    const char *introspected_id;
 };
 
 KVMState *kvm_state;
@@ -130,6 +132,51 @@ static const KVMCapabilityInfo kvm_required_capabilites[] = {
     KVM_CAP_INFO(JOIN_MEMORY_REGIONS_WORKS),
     KVM_CAP_LAST_INFO
 };
+
+static void connect_introspection(const char *id, Error **errp)
+{
+    KVMState *s;
+    int ret;
+    struct kvm_introspection h = {};
+    Object *obj;
+
+    /* TODO: how do we reconnect? */
+    /* TODO: proper capabilities. */
+
+    obj = object_resolve_path_component(object_get_objects_root(), id);
+    if (!obj) {
+        error_setg(errp, "introspection object '%s' not found", id);
+        return;
+    }
+
+    h.fd = vm_introspection_fd(obj, &h.commands, &h.events, errp);
+
+    if (h.fd == -1) {
+        error_setg(errp, "introspection handshake failed");
+        return;
+    }
+
+    s = KVM_STATE(current_machine->accelerator);
+
+    ret = kvm_vm_ioctl(s, KVM_INTROSPECTION, &h);
+    close(h.fd);
+
+    if (ret < 0) {
+        error_setg(errp, "handing over the introspection fd failed: %d",
+                   -errno);
+    }
+}
+
+void kvm_configure(QemuOpts *opts, Error **errp)
+{
+    KVMState *s = KVM_STATE(current_machine->accelerator);
+    const char *i = qemu_opt_get(opts, "introspection");
+
+    if (i) {
+        s->introspected_id = i;
+        connect_introspection(i, errp);
+    }
+}
 
 int kvm_get_max_memslots(void)
 {

@@ -531,4 +531,11 @@ int kvm_set_one_reg(CPUState *cs, uint64_t id, void *source);
 int kvm_get_one_reg(CPUState *cs, uint64_t id, void *target);
 struct ppc_radix_page_info *kvm_get_radix_page_info(void);
 int kvm_get_max_memslots(void);
+
+/**
+ * kvm_configure:
+ * @opts: accel properties
+ * @errp: error object handle
+ */
+void kvm_configure(QemuOpts *opts, Error **errp);
 #endif

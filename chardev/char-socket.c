@@ -981,6 +981,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     bool is_tn3270      = qemu_opt_get_bool(opts, "tn3270", false);
     bool do_nodelay     = !qemu_opt_get_bool(opts, "delay", true);
     int64_t reconnect   = qemu_opt_get_number(opts, "reconnect", 0);
+    const char *cid  = qemu_opt_get(opts, "cid");
     const char *path = qemu_opt_get(opts, "path");
     const char *host = qemu_opt_get(opts, "host");
     const char *port = qemu_opt_get(opts, "port");
@@ -990,8 +991,8 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
 
     backend->type = CHARDEV_BACKEND_KIND_SOCKET;
     if (!path) {
-        if (!host) {
-            error_setg(errp, "chardev: socket: no host given");
+        if (!host && !cid) {
+            error_setg(errp, "chardev: socket: no %s given", host ? "cid" : "host");
             return;
         }
         if (!port) {
@@ -1028,6 +1029,13 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_UNIX;
         q_unix = addr->u.q_unix.data = g_new0(UnixSocketAddress, 1);
         q_unix->path = g_strdup(path);
+    } else if (cid) {
+        addr->type = SOCKET_ADDRESS_LEGACY_KIND_VSOCK;
+        addr->u.vsock.data = g_new0(VsockSocketAddress, 1);
+        *addr->u.vsock.data = (VsockSocketAddress) {
+            .cid  = g_strdup(cid),
+            .port = g_strdup(port),
+        };
     } else {
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_INET;
         addr->u.inet.data = g_new(InetSocketAddress, 1);
@@ -1062,6 +1070,21 @@ char_socket_get_connected(Object *obj, Error **errp)
     return s->connected;
 }
 
+static void
+char_socket_get_fd(Object *obj, Visitor *v, const char *name, void *opaque,
+                   Error **errp)
+{
+    int fd = -1;
+    SocketChardev *s = SOCKET_CHARDEV(obj);
+    QIOChannelSocket *sock = QIO_CHANNEL_SOCKET(s->sioc);
+
+    if (sock) {
+        fd = sock->fd;
+    }
+
+    visit_type_int32(v, name, &fd, errp);
+}
+
 static void char_socket_class_init(ObjectClass *oc, void *data)
 {
     ChardevClass *cc = CHARDEV_CLASS(oc);
@@ -1084,6 +1107,9 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
 
     object_class_property_add_bool(oc, "connected", char_socket_get_connected,
                                    NULL, &error_abort);
+
+    object_class_property_add(oc, "fd", "int32", char_socket_get_fd,
+                              NULL, NULL, NULL, &error_abort);
 }
 
 static const TypeInfo char_socket_type_info = {
