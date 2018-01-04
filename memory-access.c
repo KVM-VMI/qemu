@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <stdint.h>
+#include <poll.h>
 
 #include "memory-access.h"
 #include "exec/cpu-common.h"
@@ -78,64 +79,98 @@ connection_handler (int connection_fd)
 {
     int nbytes;
     struct request req;
+    struct pollfd *fds = calloc(1, sizeof(struct pollfd));
+    if (!fds)
+    {
+        fprintf(stderr, "Allocating pollfd failed\n");
+        return;
+    }
+    fds[0].fd = connection_fd;
+    fds[0].events = POLLIN | POLLERR | POLLHUP | POLLNVAL;
 
     while (1){
-        // client request should match the struct request format
-        nbytes = read(connection_fd, &req, sizeof(struct request));
-        if (nbytes != sizeof(struct request)){
-            // error
+        // poll on our connection fd
+        int nb_modified = poll(fds, 1, -1);
+        if (nb_modified < 0)
+        {
+            // poll failed
+            fprintf(stderr, "Poll failed on vmi socket: %s\n", strerror(errno));
             continue;
         }
-        else if (req.type == 0){
-            // request to quit, goodbye
+        else if (nb_modified == 0)
+        {
+            // timeout
+            fprintf(stderr, "Poll timeout on vmi socket\n");
+            continue;
+        }
+        else if (fds[0].revents & POLLERR
+                || fds[0].revents & POLLHUP
+                || fds[0].revents & POLLNVAL)
+        {
+            // error
+            fprintf(stderr, "Poll error on vmi socket\n");
             break;
         }
-        else if (req.type == 1){
-            // request to read
-            char *buf = malloc(req.length + 1);
-            nbytes = connection_read_memory(req.address, buf, req.length);
-            if (nbytes != req.length){
-                // read failure, return failure message
-                buf[req.length] = 0; // set last byte to 0 for failure
-                nbytes = write(connection_fd, buf, 1);
+        else if (fds[0].revents & POLLIN)
+        {
+            // client request should match the struct request format
+            nbytes = read(connection_fd, &req, sizeof(struct request));
+            if (nbytes == -1 || nbytes != sizeof(struct request)){
+                // error
+                continue;
             }
-            else{
-                // read success, return bytes
-                buf[req.length] = 1; // set last byte to 1 for success
-                nbytes = write(connection_fd, buf, nbytes + 1);
+            else if (req.type == 0){
+                // request to quit, goodbye
+                break;
             }
-            free(buf);
-        }
-        else if (req.type == 2){
-            // request to write
-            void *write_buf = malloc(req.length);
-            nbytes = read(connection_fd, write_buf, req.length);
-            if (nbytes != req.length){
-                // failed reading the message to write
-                send_fail_ack(connection_fd);
-            }
-            else{
-                // do the write
-                nbytes = connection_write_memory(req.address, write_buf, req.length);
-                if (nbytes == req.length){
-                    send_success_ack(connection_fd);
+            else if (req.type == 1){
+                // request to read
+                char *buf = malloc(req.length + 1);
+                nbytes = connection_read_memory(req.address, buf, req.length);
+                if (nbytes != req.length){
+                    // read failure, return failure message
+                    buf[req.length] = 0; // set last byte to 0 for failure
+                    nbytes = write(connection_fd, buf, 1);
                 }
                 else{
+                    // read success, return bytes
+                    buf[req.length] = 1; // set last byte to 1 for success
+                    nbytes = write(connection_fd, buf, nbytes + 1);
+                }
+                free(buf);
+            }
+            else if (req.type == 2){
+                // request to write
+                void *write_buf = malloc(req.length);
+                nbytes = read(connection_fd, write_buf, req.length);
+                if (nbytes != req.length){
+                    // failed reading the message to write
                     send_fail_ack(connection_fd);
                 }
+                else{
+                    // do the write
+                    nbytes = connection_write_memory(req.address, write_buf, req.length);
+                    if (nbytes == req.length){
+                        send_success_ack(connection_fd);
+                    }
+                    else{
+                        send_fail_ack(connection_fd);
+                    }
+                }
+                free(write_buf);
             }
-            free(write_buf);
-        }
-        else{
-            // unknown command
-            fprintf(stderr, "Qemu pmemaccess: ignoring unknown command (%" PRIu64 ")\n", req.type);
-            char *buf = malloc(1);
-            buf[0] = 0;
-            nbytes = write(connection_fd, buf, 1);
-            free(buf);
+            else{
+                // unknown command
+                fprintf(stderr, "Qemu pmemaccess: ignoring unknown command (%" PRIu64 ")\n", req.type);
+                char *buf = malloc(1);
+                buf[0] = 0;
+                nbytes = write(connection_fd, buf, 1);
+                free(buf);
+            }
         }
     }
 
+    free(fds);
     close(connection_fd);
 }
 
