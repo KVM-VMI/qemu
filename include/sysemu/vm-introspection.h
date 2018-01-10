@@ -1,7 +1,7 @@
 /*
  * VM Introspection
  *
- * Copyright (C) 2017 Bitdefender S.R.L.
+ * Copyright (C) 2017-2018 Bitdefender S.R.L.
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -16,9 +16,9 @@
  * The VMIntrospection object is used to do the handshake with an
  * introspection tool and pass the connection to KVM.
  *
- *  $QEMU -chardev socket,id=chardev0,type=vsock,cid=10,port=1234           \
- *        -object secret,id=key0,data=some                                  \
- *        -object introspection,id=kvmi,chardev=chardev0,key=key0,allow=all \
+ *  $QEMU -chardev socket,id=chardev0,type=vsock,cid=10,port=1234,reconnect=1 \
+ *        -object secret,id=key0,data=some                                    \
+ *        -object introspection,id=kvmi,chardev=chardev0,key=key0             \
  *        -accel kvm,introspection=kvmi
  *
  */
@@ -38,16 +38,11 @@ typedef struct VMIntrospection_handshake {
 } VMIntrospection_handshake;
 
 /**
- * vm_introspection_fd:
- * @obj: the introspection object
- * @commands: allowed commands mask
- * @events: allowed events mask
+ * vm_introspection_connect:
+ * @s: the KVM context (used with kvm_vm_ioctl)
+ * @id: the introspection object name
  * @errp: error object handle
- *
- * Returns: the file handle on success or -1 on failure.
  */
-extern int vm_introspection_fd(Object *obj, uint32_t *commands,
-                               uint32_t *events, Error **errp);
+extern void vm_introspection_connect(KVMState *s, const char *id, Error **errp);
 
 #endif
-
