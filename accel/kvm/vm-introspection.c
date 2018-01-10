@@ -1,7 +1,7 @@
 /*
  * VM Introspection
  *
- * Copyright (C) 2017 Bitdefender S.R.L.
+ * Copyright (C) 2017-2018 Bitdefender S.R.L.
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -15,13 +15,22 @@
 #include "qom/object.h"
 #include "qom/object_interfaces.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/kvm.h"
 #include "sysemu/vm-introspection.h"
 
 typedef struct VMIntrospection {
     Object parent_obj;
     char *chardevid;
+    Chardev *chr;
+    CharBackend sock;
     char *keyid;
+    Object *key;
+    bool reconnecting;
+    bool stopping;
+    QemuThread thread;
+    KVMState *kvm;
     /* allow, deny commands and events */
+    struct kvm_introspection h;
 } VMIntrospection;
 
 #define TYPE_VM_INTROSPECTION "introspection"
@@ -71,6 +80,16 @@ static void instance_finalize(Object *obj)
 {
     VMIntrospection *i = VM_INTROSPECTION(obj);
 
+    if (i->chr) {
+        /* this should wake-up the thread */
+        qemu_chr_fe_deinit(&i->sock, true);
+        i->stopping = true;
+    }
+
+    if (i->reconnecting) {
+        qemu_thread_join(&i->thread);
+    }
+
     g_free(i->chardevid);
     g_free(i->keyid);
 }
@@ -106,13 +125,14 @@ static bool do_handshake(CharBackend *sock, Object *key, const char *sock_name,
     send.struct_size = sz;
     memcpy(&send.uuid, &qemu_uuid, sizeof(send.uuid));
 
+    /* !!! tcp_chr_write() will return sz if not connected */
     if (qemu_chr_fe_write_all(sock, (uint8_t *)&send, sz) != sz) {
-        error_setg(errp, "error writing to '%s': %d", sock_name, errno);
+        error_setg_errno(errp, errno, "error writing to '%s'", sock_name);
         return false;
     }
 
     if (qemu_chr_fe_read_all(sock, (uint8_t *)&recv, sz) != sz) {
-        error_setg(errp, "error reading from '%s': %d", sock_name, errno);
+        error_setg_errno(errp, errno, "error reading from '%s'", sock_name);
         return false;
     }
 
@@ -124,46 +144,122 @@ static bool do_handshake(CharBackend *sock, Object *key, const char *sock_name,
     return true;
 }
 
-int vm_introspection_fd(Object *obj, uint32_t *commands, uint32_t *events,
-                        Error **errp)
+static bool connect_fd(VMIntrospection *i, Error **errp)
 {
-    VMIntrospection *i = VM_INTROSPECTION(obj);
-    Chardev *chr;
-    CharBackend sock;
-    Object *key;
-    int fd = -1;
-
+    memset(&i->h, 0, sizeof(i->h));
+    i->h.fd = -1;
     /* TODO: proper handling of allow,deny props */
-    *commands = *events = -1;
+    i->h.commands = i->h.events = -1;
 
-    key = object_resolve_path_component(object_get_objects_root(), i->keyid);
-    if (!key) {
-        error_setg(errp, "No secret object with id '%s'", i->keyid);
-        return -1;
-    }
+    if (do_handshake(&i->sock, i->key, i->chardevid, errp)) {
+        i->h.fd = object_property_get_int(OBJECT(i->chr), "fd", errp);
 
-    chr = qemu_chr_find(i->chardevid);
-    if (chr == NULL) {
-        error_setg(errp, "Device '%s' not found", i->chardevid);
-        return -1;
-    }
-
-    if (!qemu_chr_fe_init(&sock, chr, &error_abort)) {
-        error_setg(errp, "Device '%s' not initialized", i->chardevid);
-        return -1;
-    }
-
-    if (do_handshake(&sock, key, i->chardevid, errp)) {
-        fd = object_property_get_int(OBJECT(chr), "fd", errp);
-        if (fd != -1) {
-            fd = dup(fd);
-        } else {
-            error_setg(errp, "no file handle from '%s': %d", i->chardevid,
-                       errno);
+        if (i->h.fd == -1) {
+            error_append_hint(errp, "no file handle from '%s'", i->chardevid);
         }
     }
 
-    qemu_chr_fe_deinit(&sock, true);
+    return (i->h.fd != -1);
+}
 
-    return fd;
+static bool connect_introspection(VMIntrospection *i, Error **errp)
+{
+    int ret;
+
+    if (!connect_fd(i, errp)) {
+        error_append_hint(errp, "introspection handshake failed\n");
+        return false;
+    }
+
+    ret = kvm_vm_ioctl(i->kvm, KVM_INTROSPECTION, &i->h);
+
+    if (ret < 0) {
+        error_setg_errno(errp, -errno, "ioctl/KVM_INTROSPECTION failed");
+        return false;
+    }
+
+    return true;
+}
+
+static void *reconnect_introspection(void *arg)
+{
+    VMIntrospection *i = arg;
+    int ret = -1;
+
+    for (; !i->stopping && ret < 0; sleep(2)) {
+        Error *err = NULL;
+
+        ret = qemu_chr_fe_wait_connected(&i->sock, &err);
+
+        if (ret == 0 && connect_introspection(i, &err)) {
+            info_report("introspection connected");
+            break;
+        }
+
+        if (err) {
+            warn_report_err(err);
+        }
+        /* error_free(err); */
+    }
+
+    i->reconnecting = false;
+
+    return NULL;
+}
+
+static void connect_or_add_watch(VMIntrospection *i, Error **errp)
+{
+    Error *err = NULL;
+
+    if (qemu_chr_fe_backend_open(&i->sock) && connect_introspection(i, &err)) {
+        return;
+    }
+
+    if (!err) { /* !open */
+        error_setg(&err, "introspection socket is not open");
+    }
+
+    error_append_hint(&err, "it will reconnect when ready\n");
+    warn_report_err(err);
+
+    i->reconnecting = true;
+
+    qemu_thread_create(&i->thread, "vm_introspection", reconnect_introspection,
+                       i, QEMU_THREAD_JOINABLE);
+}
+
+void vm_introspection_connect(KVMState *s, const char *id, Error **errp)
+{
+    VMIntrospection *i;
+    Object *obj;
+
+    obj = object_resolve_path_component(object_get_objects_root(), id);
+    if (!obj) {
+        error_setg(errp, "introspection object '%s' not found", id);
+        return;
+    }
+
+    i = VM_INTROSPECTION(obj);
+
+    i->kvm = s;
+
+    i->key = object_resolve_path_component(object_get_objects_root(), i->keyid);
+    if (!i->key) {
+        error_setg(errp, "No secret object with id '%s'", i->keyid);
+        return;
+    }
+
+    i->chr = qemu_chr_find(i->chardevid);
+    if (!i->chr) {
+        error_setg(errp, "Device '%s' not found", i->chardevid);
+        return;
+    }
+
+    if (!qemu_chr_fe_init(&i->sock, i->chr, errp)) {
+        i->chr = NULL;
+        error_setg(errp, "Device '%s' not initialized", i->chardevid);
+        return;
+    }
+
+    connect_or_add_watch(i, errp);
 }
