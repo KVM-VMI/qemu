@@ -199,7 +199,6 @@ static void *reconnect_introspection(void *arg)
         if (err) {
             warn_report_err(err);
         }
-        /* error_free(err); */
     }
 
     i->reconnecting = false;
