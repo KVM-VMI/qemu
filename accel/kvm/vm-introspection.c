@@ -25,9 +25,7 @@ typedef struct VMIntrospection {
     CharBackend sock;
     char *keyid;
     Object *key;
-    bool reconnecting;
-    bool stopping;
-    QemuThread thread;
+    guint watch;
     KVMState *kvm;
     /* allow, deny commands and events */
     struct kvm_introspection h;
@@ -81,13 +79,11 @@ static void instance_finalize(Object *obj)
     VMIntrospection *i = VM_INTROSPECTION(obj);
 
     if (i->chr) {
-        /* this should wake-up the thread */
+        if (i->watch) {
+            g_source_remove(i->watch);
+            i->watch = 0;
+        }
         qemu_chr_fe_deinit(&i->sock, true);
-        i->stopping = true;
-    }
-
-    if (i->reconnecting) {
-        qemu_thread_join(&i->thread);
     }
 
     g_free(i->chardevid);
@@ -181,29 +177,44 @@ static bool connect_introspection(VMIntrospection *i, Error **errp)
     return true;
 }
 
-static void *reconnect_introspection(void *arg)
+static gboolean force_reconnect(GIOChannel *chan, GIOCondition cond,
+                                void *opaque)
 {
-    VMIntrospection *i = arg;
-    int ret = -1;
+    VMIntrospection *i = opaque;
 
-    for (; !i->stopping && ret < 0; sleep(2)) {
+    qemu_chr_fe_disconnect(&i->sock);
+
+    return TRUE;
+}
+
+static void chr_event(void *opaque, int event)
+{
+    VMIntrospection *i = opaque;
+
+    switch (event) {
+    case CHR_EVENT_OPENED: {
         Error *err = NULL;
-
-        ret = qemu_chr_fe_wait_connected(&i->sock, &err);
-
-        if (ret == 0 && connect_introspection(i, &err)) {
+        if (connect_introspection(i, &err)) {
             info_report("introspection connected");
-            break;
-        }
-
-        if (err) {
+            i->watch = qemu_chr_fe_add_watch(&i->sock, G_IO_HUP,
+                                             force_reconnect, i);
+        } else {
+            error_append_hint(&err, "reconnecting\n");
             warn_report_err(err);
+            qemu_chr_fe_disconnect(&i->sock);
         }
+        break;
     }
-
-    i->reconnecting = false;
-
-    return NULL;
+    case CHR_EVENT_CLOSED:
+        if (i->watch) {
+            info_report("introspection disconnected");
+            g_source_remove(i->watch);
+            i->watch = 0;
+        }
+        break;
+    default:
+        break;
+    }
 }
 
 static void connect_or_add_watch(VMIntrospection *i, Error **errp)
@@ -218,13 +229,11 @@ static void connect_or_add_watch(VMIntrospection *i, Error **errp)
         error_setg(&err, "introspection socket is not open");
     }
 
-    error_append_hint(&err, "it will reconnect when ready\n");
+    error_append_hint(&err, "reconnecting as soon as possible\n");
     warn_report_err(err);
 
-    i->reconnecting = true;
-
-    qemu_thread_create(&i->thread, "vm_introspection", reconnect_introspection,
-                       i, QEMU_THREAD_JOINABLE);
+    qemu_chr_fe_set_handlers(&i->sock, NULL, NULL, chr_event, NULL, i, NULL,
+                             true);
 }
 
 void vm_introspection_connect(KVMState *s, const char *id, Error **errp)
