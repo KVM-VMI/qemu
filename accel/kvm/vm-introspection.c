@@ -217,25 +217,6 @@ static void chr_event(void *opaque, int event)
     }
 }
 
-static void connect_or_add_watch(VMIntrospection *i, Error **errp)
-{
-    Error *err = NULL;
-
-    if (qemu_chr_fe_backend_open(&i->sock) && connect_introspection(i, &err)) {
-        return;
-    }
-
-    if (!err) { /* !open */
-        error_setg(&err, "introspection socket is not open");
-    }
-
-    error_append_hint(&err, "reconnecting as soon as possible\n");
-    warn_report_err(err);
-
-    qemu_chr_fe_set_handlers(&i->sock, NULL, NULL, chr_event, NULL, i, NULL,
-                             true);
-}
-
 void vm_introspection_connect(KVMState *s, const char *id, Error **errp)
 {
     VMIntrospection *i;
@@ -269,5 +250,11 @@ void vm_introspection_connect(KVMState *s, const char *id, Error **errp)
         return;
     }
 
-    connect_or_add_watch(i, errp);
+    if (!object_property_get_bool(OBJECT(i->chr), "reconnecting", NULL)) {
+        error_setg(errp, "missing reconnect=N for '%s'", i->chardevid);
+        return;
+    }
+
+    qemu_chr_fe_set_handlers(&i->sock, NULL, NULL, chr_event, NULL, i, NULL,
+                             true);
 }
