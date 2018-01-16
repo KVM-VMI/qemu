@@ -207,7 +207,7 @@ static void chr_event(void *opaque, int event)
     }
     case CHR_EVENT_CLOSED:
         if (i->watch) {
-            info_report("introspection disconnected");
+            warn_report("introspection disconnected");
             g_source_remove(i->watch);
             i->watch = 0;
         }
