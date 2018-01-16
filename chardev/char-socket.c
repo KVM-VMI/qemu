@@ -1070,6 +1070,14 @@ char_socket_get_connected(Object *obj, Error **errp)
     return s->connected;
 }
 
+static bool
+char_socket_get_reconnecting(Object *obj, Error **errp)
+{
+    SocketChardev *s = SOCKET_CHARDEV(obj);
+
+    return s->reconnect_time > 0;
+}
+
 static void
 char_socket_get_fd(Object *obj, Visitor *v, const char *name, void *opaque,
                    Error **errp)
@@ -1106,6 +1114,10 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
                               NULL, NULL, &error_abort);
 
     object_class_property_add_bool(oc, "connected", char_socket_get_connected,
+                                   NULL, &error_abort);
+
+    object_class_property_add_bool(oc, "reconnecting",
+                                   char_socket_get_reconnecting,
                                    NULL, &error_abort);
 
     object_class_property_add(oc, "fd", "int32", char_socket_get_fd,
