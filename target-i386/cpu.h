@@ -523,7 +523,7 @@ typedef uint32_t FeatureWordArray[FEATURE_WORDS];
 #define CPUID_EXT_AVX      (1U << 28)
 #define CPUID_EXT_F16C     (1U << 29)
 #define CPUID_EXT_RDRAND   (1U << 30)
-#define CPUID_EXT_HYPERVISOR  (1U << 31)
+#define CPUID_EXT_HYPERVISOR  (0U)
 
 #define CPUID_EXT2_FPU     (1U << 0)
 #define CPUID_EXT2_VME     (1U << 1)
