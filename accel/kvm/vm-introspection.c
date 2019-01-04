@@ -1,7 +1,7 @@
 /*
  * VM Introspection
  *
- * Copyright (C) 2017-2018 Bitdefender S.R.L.
+ * Copyright (C) 2017-2019 Bitdefender S.R.L.
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -113,12 +113,11 @@ type_init(register_types);
 static bool do_handshake(CharBackend *sock, Object *key, const char *sock_name,
                          Error **errp)
 {
-    VMIntrospection_handshake send, recv;
+    VMIntrospection_qemu2introspector send = {};
+    VMIntrospection_introspector2qemu recv;
     size_t sz = sizeof(send);
 
-    /* TODO: do the cookie dance */
-
-    send.struct_size = sz;
+    send.struct_size = sizeof(send);
     memcpy(&send.uuid, &qemu_uuid, sizeof(send.uuid));
 
     /* !!! tcp_chr_write() will return sz if not connected */
@@ -127,15 +126,14 @@ static bool do_handshake(CharBackend *sock, Object *key, const char *sock_name,
         return false;
     }
 
+    sz = sizeof(recv);
+
     if (qemu_chr_fe_read_all(sock, (uint8_t *)&recv, sz) != sz) {
         error_setg_errno(errp, errno, "error reading from '%s'", sock_name);
         return false;
     }
 
-    if (memcmp(&send, &recv, sz)) {
-        error_setg(errp, "handshake failed");
-        return false;
-    }
+    /* TODO: check recv */
 
     return true;
 }

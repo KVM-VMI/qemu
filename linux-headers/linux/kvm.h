@@ -1456,10 +1456,11 @@ struct kvm_sev_dbg {
 };
 
 struct kvm_introspection {
-        int fd;
-        __u32 padding;
-        __u32 commands;
-        __u32 events;
+	int fd;
+	__u32 padding;
+	__u32 commands;
+	__u32 events;
+	__u8 uuid[16];
 };
 #define KVM_INTROSPECTION      _IOW(KVMIO, 0xff, struct kvm_introspection)
 

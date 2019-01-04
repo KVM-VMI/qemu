@@ -1,7 +1,7 @@
 /*
  * VM Introspection
  *
- * Copyright (C) 2017-2018 Bitdefender S.R.L.
+ * Copyright (C) 2017-2019 Bitdefender S.R.L.
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -24,18 +24,36 @@
  */
 
 /**
- * VMIntrospection_handshake:
+ * VMIntrospection_qemu2introspector:
  *
- * This structure is passed to the introspection tool during the handshake.
+ * This structure is sent to the introspection tool during the handshake.
  *
  * @struct_size: the structure size (in case we extend it)
  * @uuid: the UUID (the introspector may apply different settings based on this)
+ * @name: the name
  */
-typedef struct VMIntrospection_handshake {
+typedef struct VMIntrospection_qemu2introspector {
     uint32_t struct_size;
     QemuUUID uuid;
+    uint32_t padding;
+    int64_t  padding2;
+    char     name[64];
     /* ... */
-} VMIntrospection_handshake;
+} VMIntrospection_qemu2introspector;
+
+/**
+ * VMIntrospection_introspector2qemu:
+ *
+ * This structure is received to the introspection tool during the handshake.
+ *
+ * @struct_size: the structure size (in case we extend it)
+ * @cookie_hash: the cookie used to authenticate the introspection tool
+ */
+typedef struct VMIntrospection_introspector2qemu {
+    uint32_t struct_size;
+    uint8_t  cookie_hash[20];
+    /* ... */
+} VMIntrospection_introspector2qemu;
 
 /**
  * vm_introspection_connect:
