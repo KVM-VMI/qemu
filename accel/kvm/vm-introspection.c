@@ -143,7 +143,6 @@ static bool connect_fd(VMIntrospection *i, Error **errp)
     memset(&i->h, 0, sizeof(i->h));
     i->h.fd = -1;
     /* TODO: proper handling of allow,deny props */
-    i->h.commands = i->h.events = -1;
 
     if (do_handshake(&i->sock, i->key, i->chardevid, errp)) {
         i->h.fd = object_property_get_int(OBJECT(i->chr), "fd", errp);
@@ -158,18 +157,35 @@ static bool connect_fd(VMIntrospection *i, Error **errp)
 
 static bool connect_introspection(VMIntrospection *i, Error **errp)
 {
-    int ret;
+    struct kvm_introspection_feature commands, events;
+    const __s32 all_ids = -1;
 
     if (!connect_fd(i, errp)) {
         error_append_hint(errp, "introspection handshake failed\n");
         return false;
     }
 
-    ret = kvm_vm_ioctl(i->kvm, KVM_INTROSPECTION, &i->h);
-
-    if (ret < 0) {
-        error_setg_errno(errp, -errno, "ioctl/KVM_INTROSPECTION failed");
+    if (kvm_vm_ioctl(i->kvm, KVM_INTROSPECTION_HOOK, &i->h)) {
+        error_setg_errno(errp, -errno, "ioctl/KVM_INTROSPECTION_HOOK failed. Is KVM_INTROSPECTION enabled in kernel?");
         return false;
+    }
+
+    commands.allow = 1;
+    commands.id = all_ids;
+    if (kvm_vm_ioctl(kvm_state, KVM_INTROSPECTION_COMMAND, &commands)) {
+        error_setg_errno(errp, -errno,
+                         "ioctl/KVM_INTROSPECTION_COMMAND failed");
+        return false;
+
+    }
+
+    events.allow = 1;
+    events.id = all_ids;
+    if (kvm_vm_ioctl(kvm_state, KVM_INTROSPECTION_EVENT, &events)) {
+        error_setg_errno(errp, -errno,
+                         "ioctl/KVM_INTROSPECTION_EVENT failed");
+        return false;
+
     }
 
     return true;

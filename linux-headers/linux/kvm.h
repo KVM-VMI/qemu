@@ -937,6 +937,8 @@ struct kvm_ppc_resize_hpt {
 #define KVM_CAP_S390_BPB 152
 #define KVM_CAP_GET_MSR_FEATURES 153
 
+#define KVM_CAP_INTROSPECTION 999
+
 #ifdef KVM_CAP_IRQ_ROUTING
 
 struct kvm_irq_routing_irqchip {
@@ -1456,13 +1458,19 @@ struct kvm_sev_dbg {
 };
 
 struct kvm_introspection {
-	int fd;
+	__s32 fd;
 	__u32 padding;
-	__u32 commands;
-	__u32 events;
 	__u8 uuid[16];
 };
-#define KVM_INTROSPECTION      _IOW(KVMIO, 0xff, struct kvm_introspection)
+struct kvm_introspection_feature {
+	__u32 allow;
+	__s32 id;
+};
+#define KVM_INTROSPECTION_HOOK    _IOW(KVMIO, 0xff, struct kvm_introspection)
+#define KVM_INTROSPECTION_UNHOOK  _IO(KVMIO, 0xfe)
+/* write true on force-reset, false otherwise */
+#define KVM_INTROSPECTION_COMMAND _IOW(KVMIO, 0xfd, struct kvm_introspection_feature)
+#define KVM_INTROSPECTION_EVENT   _IOW(KVMIO, 0xfc, struct kvm_introspection_feature)
 
 #define KVM_DEV_ASSIGN_ENABLE_IOMMU	(1 << 0)
 #define KVM_DEV_ASSIGN_PCI_2_3		(1 << 1)
