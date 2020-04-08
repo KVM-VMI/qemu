@@ -52,10 +52,18 @@ typedef struct VMIntrospection {
     bool kvmi_hooked;
 } VMIntrospection;
 
+typedef struct VMIntrospectionClass {
+    ObjectClass parent_class;
+    uint32_t instance_counter;
+    VMIntrospection *uniq;
+} VMIntrospectionClass;
+
 #define TYPE_VM_INTROSPECTION "introspection"
 
 #define VM_INTROSPECTION(obj) \
     OBJECT_CHECK(VMIntrospection, (obj), TYPE_VM_INTROSPECTION)
+#define VM_INTROSPECTION_CLASS(class) \
+    OBJECT_CLASS_CHECK(VMIntrospectionClass, (class), TYPE_VM_INTROSPECTION)
 
 static Error *vm_introspection_init(VMIntrospection *i);
 static void vm_introspection_reset(void *opaque);
@@ -82,7 +90,13 @@ static void update_vm_start_time(VMIntrospection *i)
 
 static void complete(UserCreatable *uc, Error **errp)
 {
+    VMIntrospectionClass *ic = VM_INTROSPECTION_CLASS(OBJECT(uc)->class);
     VMIntrospection *i = VM_INTROSPECTION(uc);
+
+    if (ic->instance_counter > 1) {
+        error_setg(errp, "VMI: only one introspection object can be created");
+        return;
+    }
 
     if (!i->chardevid) {
         error_setg(errp, "VMI: chardev is not set");
@@ -107,6 +121,8 @@ static void complete(UserCreatable *uc, Error **errp)
         i->init_error = NULL;
         return;
     }
+
+    ic->uniq = i;
 
     qemu_register_reset(vm_introspection_reset, i);
 }
@@ -171,7 +187,10 @@ static void class_init(ObjectClass *oc, void *data)
 
 static void instance_init(Object *obj)
 {
+    VMIntrospectionClass *ic = VM_INTROSPECTION_CLASS(obj->class);
     VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    ic->instance_counter++;
 
     i->sock_fd = -1;
     i->created_from_command_line = (qdev_hotplug == false);
@@ -237,6 +256,7 @@ static void cancel_handshake_timer(VMIntrospection *i)
 
 static void instance_finalize(Object *obj)
 {
+    VMIntrospectionClass *ic = VM_INTROSPECTION_CLASS(obj->class);
     VMIntrospection *i = VM_INTROSPECTION(obj);
 
     g_free(i->chardevid);
@@ -253,12 +273,18 @@ static void instance_finalize(Object *obj)
     error_free(i->init_error);
 
     qemu_unregister_reset(vm_introspection_reset, i);
+
+    ic->instance_counter--;
+    if (!ic->instance_counter) {
+        ic->uniq = NULL;
+    }
 }
 
 static const TypeInfo info = {
     .name              = TYPE_VM_INTROSPECTION,
     .parent            = TYPE_OBJECT,
     .class_init        = class_init,
+    .class_size        = sizeof(VMIntrospectionClass),
     .instance_size     = sizeof(VMIntrospection),
     .instance_finalize = instance_finalize,
     .instance_init     = instance_init,
