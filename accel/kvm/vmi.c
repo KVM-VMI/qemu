@@ -19,6 +19,7 @@
 #include "chardev/char.h"
 #include "chardev/char-fe.h"
 
+#include "sysemu/vmi-intercept.h"
 #include "sysemu/vmi-handshake.h"
 
 #define HANDSHAKE_TIMEOUT_SEC 10
@@ -44,6 +45,10 @@ typedef struct VMIntrospection {
     GSource *hsk_timer;
     uint32_t handshake_timeout;
 
+    int intercepted_action;
+
+    int reconnect_time;
+
     int64_t vm_start_time;
 
     Notifier machine_ready;
@@ -57,6 +62,14 @@ typedef struct VMIntrospectionClass {
     uint32_t instance_counter;
     VMIntrospection *uniq;
 } VMIntrospectionClass;
+
+static const char *action_string[] = {
+    "none",
+    "suspend",
+    "resume",
+};
+
+static bool suspend_pending;
 
 #define TYPE_VM_INTROSPECTION "introspection"
 
@@ -411,6 +424,39 @@ static bool connect_kernel(VMIntrospection *i, Error **errp)
     return true;
 }
 
+static void enable_socket_reconnect(VMIntrospection *i)
+{
+    if (i->sock_fd == -1 && i->reconnect_time) {
+        qemu_chr_fe_reconnect_time(&i->sock, i->reconnect_time);
+        qemu_chr_fe_disconnect(&i->sock);
+        i->reconnect_time = 0;
+    }
+}
+
+static void maybe_disable_socket_reconnect(VMIntrospection *i)
+{
+    if (i->reconnect_time == 0) {
+        info_report("VMI: disable socket reconnect");
+        i->reconnect_time = qemu_chr_fe_reconnect_time(&i->sock, 0);
+    }
+}
+
+static void continue_with_the_intercepted_action(VMIntrospection *i)
+{
+    switch (i->intercepted_action) {
+    case VMI_INTERCEPT_SUSPEND:
+        vm_stop(RUN_STATE_PAUSED);
+        break;
+    default:
+        error_report("VMI: %s: unexpected action %d",
+                     __func__, i->intercepted_action);
+        break;
+    }
+
+    info_report("VMI: continue with '%s'",
+                action_string[i->intercepted_action]);
+}
+
 /*
  * We should read only the handshake structure,
  * which might have a different size than what we expect.
@@ -494,6 +540,14 @@ static void chr_event_open(VMIntrospection *i)
 {
     Error *local_err = NULL;
 
+    if (suspend_pending) {
+        info_report("VMI: %s: too soon (suspend=%d)",
+                    __func__, suspend_pending);
+        maybe_disable_socket_reconnect(i);
+        qemu_chr_fe_disconnect(&i->sock);
+        return;
+    }
+
     if (!send_handshake_info(i, &local_err)) {
         error_append_hint(&local_err, "reconnecting\n");
         warn_report_err(local_err);
@@ -521,6 +575,15 @@ static void chr_event_close(VMIntrospection *i)
     }
 
     cancel_handshake_timer(i);
+
+    if (suspend_pending) {
+        maybe_disable_socket_reconnect(i);
+
+        if (i->intercepted_action != VMI_INTERCEPT_NONE) {
+            continue_with_the_intercepted_action(i);
+            i->intercepted_action = VMI_INTERCEPT_NONE;
+        }
+    }
 }
 
 static void chr_event(void *opaque, int event)
@@ -537,6 +600,89 @@ static void chr_event(void *opaque, int event)
     default:
         break;
     }
+}
+
+static VMIntrospection *vm_introspection_object(void)
+{
+    VMIntrospectionClass *ic;
+
+    ic = VM_INTROSPECTION_CLASS(object_class_by_name(TYPE_VM_INTROSPECTION));
+
+    return ic ? ic->uniq : NULL;
+}
+
+/*
+ * This ioctl succeeds only when KVM signals the introspection tool.
+ * (the socket is connected and the event was sent without error).
+ */
+static bool signal_introspection_tool_to_unhook(VMIntrospection *i)
+{
+    int err;
+
+    err = kvm_vm_ioctl(kvm_state, KVM_INTROSPECTION_PREUNHOOK, NULL);
+
+    return !err;
+}
+
+static bool record_intercept_action(VMI_intercept_command action)
+{
+    switch (action) {
+    case VMI_INTERCEPT_SUSPEND:
+        suspend_pending = true;
+        break;
+    case VMI_INTERCEPT_RESUME:
+        suspend_pending = false;
+        break;
+    default:
+        return false;
+    }
+
+    return true;
+}
+
+static bool intercept_action(VMIntrospection *i,
+                             VMI_intercept_command action, Error **errp)
+{
+    if (i->intercepted_action != VMI_INTERCEPT_NONE) {
+        error_report("VMI: unhook in progress");
+        return false;
+    }
+
+    switch (action) {
+    case VMI_INTERCEPT_RESUME:
+        enable_socket_reconnect(i);
+        return false;
+    default:
+        break;
+    }
+
+    if (!signal_introspection_tool_to_unhook(i)) {
+        disconnect_and_unhook_kvmi(i);
+        return false;
+    }
+
+    i->intercepted_action = action;
+    return true;
+}
+
+bool vm_introspection_intercept(VMI_intercept_command action, Error **errp)
+{
+    VMIntrospection *i = vm_introspection_object();
+    bool intercepted = false;
+
+    info_report("VMI: intercept command: %s",
+                action < ARRAY_SIZE(action_string)
+                ? action_string[action]
+                : "unknown");
+
+    if (record_intercept_action(action) && i) {
+        intercepted = intercept_action(i, action, errp);
+    }
+
+    info_report("VMI: intercept action: %s",
+                intercepted ? "delayed" : "continue");
+
+    return intercepted;
 }
 
 static void vm_introspection_reset(void *opaque)
