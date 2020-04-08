@@ -55,6 +55,7 @@ typedef struct VMIntrospection {
     bool async_unhook;
     GSource *unhook_timer;
     uint32_t unhook_timeout;
+    bool unhook_on_shutdown;
 
     int reconnect_time;
 
@@ -201,6 +202,20 @@ static void prop_set_async_unhook(Object *obj, bool value, Error **errp)
     i->async_unhook = value;
 }
 
+static bool prop_get_unhook_on_shutdown(Object *obj, Error **errp)
+{
+    VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    return i->unhook_on_shutdown;
+}
+
+static void prop_set_unhook_on_shutdown(Object *obj, bool value, Error **errp)
+{
+    VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    i->unhook_on_shutdown = value;
+}
+
 static void prop_get_uint32(Object *obj, Visitor *v, const char *name,
                             void *opaque, Error **errp)
 {
@@ -282,6 +297,11 @@ static void instance_init(Object *obj)
     object_property_add_bool(obj, "async_unhook",
                              prop_get_async_unhook,
                              prop_set_async_unhook, NULL);
+
+    i->unhook_on_shutdown = true;
+    object_property_add_bool(obj, "unhook_on_shutdown",
+                             prop_get_unhook_on_shutdown,
+                             prop_set_unhook_on_shutdown, NULL);
 
     vmstate_register(NULL, 0, &vmstate_introspection, i);
 }
@@ -810,6 +830,11 @@ static bool intercept_action(VMIntrospection *i,
     }
 
     switch (action) {
+    case VMI_INTERCEPT_SHUTDOWN:
+        if (!i->unhook_on_shutdown) {
+            return false;
+        }
+        break;
     case VMI_INTERCEPT_FORCE_RESET:
         disconnect_and_unhook_kvmi(i);
         return false;
