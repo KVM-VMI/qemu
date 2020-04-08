@@ -23,6 +23,11 @@
  */
 
 #include "qemu/osdep.h"
+
+#ifdef CONFIG_AF_VSOCK
+#include <linux/vm_sockets.h>
+#endif /* CONFIG_AF_VSOCK */
+
 #include "chardev/char.h"
 #include "io/channel-socket.h"
 #include "io/channel-tls.h"
@@ -532,6 +537,14 @@ static char *sockaddr_to_str(struct sockaddr_storage *ss, socklen_t ss_len,
                                left, shost, right, sserv,
                                is_listen ? ",server" : "",
                                left, phost, right, pserv);
+
+#ifdef CONFIG_AF_VSOCK
+    case AF_VSOCK:
+        return g_strdup_printf("vsock:%d:%d%s",
+                               ((struct sockaddr_vm *)(ss))->svm_cid,
+                               ((struct sockaddr_vm *)(ss))->svm_port,
+                               is_listen ? ",server" : "");
+#endif
 
     default:
         return g_strdup_printf("unknown");
@@ -1060,6 +1073,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     bool is_tn3270      = qemu_opt_get_bool(opts, "tn3270", false);
     bool do_nodelay     = !qemu_opt_get_bool(opts, "delay", true);
     int64_t reconnect   = qemu_opt_get_number(opts, "reconnect", 0);
+    const char *cid  = qemu_opt_get(opts, "cid");
     const char *path = qemu_opt_get(opts, "path");
     const char *host = qemu_opt_get(opts, "host");
     const char *port = qemu_opt_get(opts, "port");
@@ -1068,9 +1082,9 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     SocketAddressLegacy *addr;
     ChardevSocket *sock;
 
-    if ((!!path + !!fd + !!host) != 1) {
+    if ((!!path + !!fd + !!host + !!cid) != 1) {
         error_setg(errp,
-                   "Exactly one of 'path', 'fd' or 'host' required");
+                   "Exactly one of 'path', 'fd', 'cid' or 'host' required");
         return;
     }
 
@@ -1080,7 +1094,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
             error_setg(errp, "TLS can only be used over TCP socket");
             return;
         }
-    } else if (host) {
+    } else if (host || cid) {
         if (!port) {
             error_setg(errp, "chardev: socket: no port given");
             return;
@@ -1130,6 +1144,13 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
             .ipv4 = qemu_opt_get_bool(opts, "ipv4", 0),
             .has_ipv6 = qemu_opt_get(opts, "ipv6"),
             .ipv6 = qemu_opt_get_bool(opts, "ipv6", 0),
+        };
+    } else if (cid) {
+        addr->type = SOCKET_ADDRESS_LEGACY_KIND_VSOCK;
+        addr->u.vsock.data = g_new0(VsockSocketAddress, 1);
+        *addr->u.vsock.data = (VsockSocketAddress) {
+            .cid  = g_strdup(cid),
+            .port = g_strdup(port),
         };
     } else if (fd) {
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_FD;
