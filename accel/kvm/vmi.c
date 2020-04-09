@@ -21,6 +21,8 @@
 #include "migration/vmstate.h"
 #include "migration/migration.h"
 #include "migration/misc.h"
+#include "qapi/qmp/qobject.h"
+#include "monitor/monitor.h"
 
 #include "sysemu/vmi-intercept.h"
 #include "sysemu/vmi-handshake.h"
@@ -50,6 +52,7 @@ typedef struct VMIntrospection {
     uint32_t handshake_timeout;
 
     int intercepted_action;
+    bool async_unhook;
     GSource *unhook_timer;
     uint32_t unhook_timeout;
 
@@ -60,6 +63,10 @@ typedef struct VMIntrospection {
     Notifier machine_ready;
     Notifier migration_state_change;
     bool created_from_command_line;
+
+    void *qmp_monitor;
+    QObject *qmp_id;
+    bool qmp_resume;
 
     bool kvmi_hooked;
 } VMIntrospection;
@@ -178,6 +185,20 @@ static void prop_set_key(Object *obj, const char *value, Error **errp)
     i->keyid = g_strdup(value);
 }
 
+static bool prop_get_async_unhook(Object *obj, Error **errp)
+{
+    VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    return i->async_unhook;
+}
+
+static void prop_set_async_unhook(Object *obj, bool value, Error **errp)
+{
+    VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    i->async_unhook = value;
+}
+
 static void prop_get_uint32(Object *obj, Visitor *v, const char *name,
                             void *opaque, Error **errp)
 {
@@ -255,6 +276,11 @@ static void instance_init(Object *obj)
                         prop_set_uint32, prop_get_uint32,
                         NULL, &i->unhook_timeout, NULL);
 
+    i->async_unhook = true;
+    object_property_add_bool(obj, "async_unhook",
+                             prop_get_async_unhook,
+                             prop_set_async_unhook, NULL);
+
     vmstate_register(NULL, 0, &vmstate_introspection, i);
 }
 
@@ -330,6 +356,8 @@ static void instance_finalize(Object *obj)
     }
 
     error_free(i->init_error);
+
+    qobject_decref(i->qmp_id);
 
     qemu_unregister_reset(vm_introspection_reset, i);
 
@@ -504,6 +532,12 @@ static void continue_with_the_intercepted_action(VMIntrospection *i)
 
     info_report("VMI: continue with '%s'",
                 action_string[i->intercepted_action]);
+
+    if (i->qmp_monitor) {
+        monitor_qmp_respond_later(i->qmp_monitor, i->qmp_id, i->qmp_resume);
+        i->qmp_monitor = NULL;
+        i->qmp_id = NULL;
+    }
 }
 
 /*
@@ -674,6 +708,22 @@ static VMIntrospection *vm_introspection_object(void)
     return ic ? ic->uniq : NULL;
 }
 
+bool vm_introspection_qmp_delay(void *mon, QObject *id, bool resume)
+{
+    VMIntrospection *i = vm_introspection_object();
+    bool intercepted;
+
+    intercepted = i && i->intercepted_action == VMI_INTERCEPT_SUSPEND;
+
+    if (intercepted) {
+        i->qmp_monitor = mon;
+        i->qmp_id = id;
+        i->qmp_resume = resume;
+    }
+
+    return intercepted;
+}
+
 /*
  * This ioctl succeeds only when KVM signals the introspection tool.
  * (the socket is connected and the event was sent without error).
@@ -708,6 +758,29 @@ static bool record_intercept_action(VMI_intercept_command action)
     return true;
 }
 
+/*
+ * The method to postpone the intercepted command (async_unhook)
+ * until the introspection tool has the chance to remove its hooks
+ * (e.g. breakpoints) from guest doesn't work on snapshot+memory
+ * (at least as it is done by libvirt/virt-manager 1.3.1).
+ * The sequence qmp_stop()+save_vm+qmp_cont() doesn't wait for
+ * the STOP event. So, we need to wait here, blocking qmp_stop(),
+ * until the introspection tool unhooks. Meanwhile, the guest
+ * runs and the FD signals are handled.
+ */
+static void wait_until_the_socket_is_closed(VMIntrospection *i)
+{
+    info_report("VMI: start waiting until fd=%d is closed", i->sock_fd);
+
+    while (i->sock_fd != -1) {
+        main_loop_wait(false);
+    }
+
+    info_report("VMI: continue with the intercepted action fd=%d", i->sock_fd);
+
+    maybe_disable_socket_reconnect(i);
+}
+
 static bool intercept_action(VMIntrospection *i,
                              VMI_intercept_command action, Error **errp)
 {
@@ -735,6 +808,11 @@ static bool intercept_action(VMIntrospection *i,
     i->unhook_timer = qemu_chr_timeout_add_ms(i->chr,
                                               i->unhook_timeout * 1000,
                                               unhook_timeout_cbk, i);
+
+    if (!i->async_unhook) {
+        wait_until_the_socket_is_closed(i);
+        return false;
+    }
 
     i->intercepted_action = action;
     return true;
