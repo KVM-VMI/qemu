@@ -133,7 +133,10 @@ static void machine_ready(Notifier *notifier, void *data)
 
 static void update_vm_start_time(VMIntrospection *i)
 {
-    i->vm_start_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    struct timespec now;
+
+    clock_gettime(CLOCK_REALTIME, &now);
+    i->vm_start_time = now.tv_sec;
 }
 
 static void complete(UserCreatable *uc, Error **errp)
