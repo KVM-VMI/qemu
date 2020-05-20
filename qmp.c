@@ -42,6 +42,8 @@
 #include "hw/mem/pc-dimm.h"
 #include "hw/acpi/acpi_dev_interface.h"
 
+#include "sysemu/vmi-intercept.h"
+
 NameInfo *qmp_query_name(Error **errp)
 {
     NameInfo *info = g_malloc0(sizeof(*info));
@@ -103,17 +105,28 @@ void qmp_stop(Error **errp)
     if (runstate_check(RUN_STATE_INMIGRATE)) {
         autostart = 0;
     } else {
+        if (vm_introspection_intercept(VMI_INTERCEPT_SUSPEND, errp)) {
+            return;
+        }
         vm_stop(RUN_STATE_PAUSED);
     }
 }
 
 void qmp_system_reset(Error **errp)
 {
+    if (vm_introspection_intercept(VMI_INTERCEPT_FORCE_RESET, errp)) {
+        return;
+    }
+
     qemu_system_reset_request(SHUTDOWN_CAUSE_HOST_QMP);
 }
 
 void qmp_system_powerdown(Error **erp)
 {
+    if (vm_introspection_intercept(VMI_INTERCEPT_SHUTDOWN, erp)) {
+        return;
+    }
+
     qemu_system_powerdown_request();
 }
 
@@ -200,6 +213,9 @@ void qmp_cont(Error **errp)
         autostart = 1;
     } else {
         vm_start();
+        /* this interception is post-event as we might need the vm to run before
+         * doing the interception, therefore we do not need the return value */
+        vm_introspection_intercept(VMI_INTERCEPT_RESUME, errp);
     }
 }
 

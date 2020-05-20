@@ -84,6 +84,7 @@
 #include "sysemu/cpus.h"
 #include "sysemu/iothread.h"
 #include "qemu/cutils.h"
+#include "sysemu/vmi-intercept.h"
 
 #if defined(TARGET_S390X)
 #include "hw/s390x/storage-keys.h"
@@ -4060,6 +4061,21 @@ static void monitor_qmp_respond(Monitor *mon, QObject *rsp,
     qobject_decref(rsp);
 }
 
+void monitor_qmp_respond_later(void *_mon, QObject *id, bool resume)
+{
+    Monitor *mon = _mon;
+    QDict *rsp;
+
+    rsp = qdict_new();
+    qdict_put_obj(rsp, "return", QOBJECT(qdict_new()));
+
+    monitor_qmp_respond(mon, QOBJECT(rsp), NULL, id);
+
+    if (resume) {
+        monitor_resume(mon);
+    }
+}
+
 /*
  * Dispatch one single QMP request. The function will free the req_obj
  * and objects inside it before return.
@@ -4090,6 +4106,12 @@ static void monitor_qmp_dispatch_one(QMPRequest *req_obj)
 
     cur_mon = old_mon;
 
+    if (vm_introspection_qmp_delay(mon, id, need_resume)) {
+        assert(need_resume);
+        qobject_decref(rsp);
+        goto out;
+    }
+
     /* Respond if necessary */
     monitor_qmp_respond(mon, rsp, NULL, id);
 
@@ -4098,6 +4120,7 @@ static void monitor_qmp_dispatch_one(QMPRequest *req_obj)
         monitor_resume(mon);
     }
 
+out:
     qobject_decref(req);
 }
 

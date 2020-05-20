@@ -23,6 +23,11 @@
  */
 
 #include "qemu/osdep.h"
+
+#ifdef CONFIG_AF_VSOCK
+#include <linux/vm_sockets.h>
+#endif /* CONFIG_AF_VSOCK */
+
 #include "chardev/char.h"
 #include "io/channel-socket.h"
 #include "io/channel-tls.h"
@@ -533,6 +538,14 @@ static char *sockaddr_to_str(struct sockaddr_storage *ss, socklen_t ss_len,
                                is_listen ? ",server" : "",
                                left, phost, right, pserv);
 
+#ifdef CONFIG_AF_VSOCK
+    case AF_VSOCK:
+        return g_strdup_printf("vsock:%d:%d%s",
+                               ((struct sockaddr_vm *)(ss))->svm_cid,
+                               ((struct sockaddr_vm *)(ss))->svm_port,
+                               is_listen ? ",server" : "");
+#endif
+
     default:
         return g_strdup_printf("unknown");
     }
@@ -942,7 +955,7 @@ static void qmp_chardev_open_socket(Chardev *chr,
     SocketChardev *s = SOCKET_CHARDEV(chr);
     ChardevSocket *sock = backend->u.socket.data;
     bool do_nodelay     = sock->has_nodelay ? sock->nodelay : false;
-    bool is_listen      = sock->has_server  ? sock->server  : true;
+    bool is_listen      = sock->has_server  ? sock->server  : false;
     bool is_telnet      = sock->has_telnet  ? sock->telnet  : false;
     bool is_tn3270      = sock->has_tn3270  ? sock->tn3270  : false;
     bool is_waitconnect = sock->has_wait    ? sock->wait    : false;
@@ -1060,6 +1073,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     bool is_tn3270      = qemu_opt_get_bool(opts, "tn3270", false);
     bool do_nodelay     = !qemu_opt_get_bool(opts, "delay", true);
     int64_t reconnect   = qemu_opt_get_number(opts, "reconnect", 0);
+    const char *cid  = qemu_opt_get(opts, "cid");
     const char *path = qemu_opt_get(opts, "path");
     const char *host = qemu_opt_get(opts, "host");
     const char *port = qemu_opt_get(opts, "port");
@@ -1068,9 +1082,9 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     SocketAddressLegacy *addr;
     ChardevSocket *sock;
 
-    if ((!!path + !!fd + !!host) != 1) {
+    if ((!!path + !!fd + !!host + !!cid) != 1) {
         error_setg(errp,
-                   "Exactly one of 'path', 'fd' or 'host' required");
+                   "Exactly one of 'path', 'fd', 'cid' or 'host' required");
         return;
     }
 
@@ -1080,7 +1094,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
             error_setg(errp, "TLS can only be used over TCP socket");
             return;
         }
-    } else if (host) {
+    } else if (host || cid) {
         if (!port) {
             error_setg(errp, "chardev: socket: no port given");
             return;
@@ -1131,6 +1145,13 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
             .has_ipv6 = qemu_opt_get(opts, "ipv6"),
             .ipv6 = qemu_opt_get_bool(opts, "ipv6", 0),
         };
+    } else if (cid) {
+        addr->type = SOCKET_ADDRESS_LEGACY_KIND_VSOCK;
+        addr->u.vsock.data = g_new0(VsockSocketAddress, 1);
+        *addr->u.vsock.data = (VsockSocketAddress) {
+            .cid  = g_strdup(cid),
+            .port = g_strdup(port),
+        };
     } else if (fd) {
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_FD;
         addr->u.fd.data = g_new(String, 1);
@@ -1158,6 +1179,28 @@ char_socket_get_connected(Object *obj, Error **errp)
     return s->connected;
 }
 
+static bool char_socket_get_reconnecting(Object *obj, Error **errp)
+{
+    SocketChardev *s = SOCKET_CHARDEV(obj);
+
+    return s->reconnect_time > 0;
+}
+
+static void
+char_socket_get_fd(Object *obj, Visitor *v, const char *name, void *opaque,
+                   Error **errp)
+{
+    int fd = -1;
+    SocketChardev *s = SOCKET_CHARDEV(obj);
+    QIOChannelSocket *sock = QIO_CHANNEL_SOCKET(s->sioc);
+
+    if (sock) {
+        fd = sock->fd;
+    }
+
+    visit_type_int32(v, name, &fd, errp);
+}
+
 static int tcp_chr_machine_done_hook(Chardev *chr)
 {
     SocketChardev *s = SOCKET_CHARDEV(chr);
@@ -1173,6 +1216,19 @@ static int tcp_chr_machine_done_hook(Chardev *chr)
     return 0;
 }
 
+static int tcp_chr_reconnect_time(Chardev *chr, int secs)
+{
+    SocketChardev *s = SOCKET_CHARDEV(chr);
+
+    int old = s->reconnect_time;
+
+    if (secs >= 0) {
+        s->reconnect_time = secs;
+    }
+
+    return old;
+}
+
 static void char_socket_class_init(ObjectClass *oc, void *data)
 {
     ChardevClass *cc = CHARDEV_CLASS(oc);
@@ -1183,6 +1239,7 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
     cc->chr_write = tcp_chr_write;
     cc->chr_sync_read = tcp_chr_sync_read;
     cc->chr_disconnect = tcp_chr_disconnect;
+    cc->chr_reconnect_time = tcp_chr_reconnect_time;
     cc->get_msgfds = tcp_get_msgfds;
     cc->set_msgfds = tcp_set_msgfds;
     cc->chr_add_client = tcp_chr_add_client;
@@ -1196,6 +1253,13 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
 
     object_class_property_add_bool(oc, "connected", char_socket_get_connected,
                                    NULL, &error_abort);
+
+    object_class_property_add_bool(oc, "reconnecting",
+                                   char_socket_get_reconnecting,
+                                   NULL, &error_abort);
+
+    object_class_property_add(oc, "fd", "int32", char_socket_get_fd,
+                              NULL, NULL, NULL, &error_abort);
 }
 
 static const TypeInfo char_socket_type_info = {
