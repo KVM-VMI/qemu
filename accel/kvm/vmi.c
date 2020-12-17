@@ -13,6 +13,7 @@
 #include "qemu/error-report.h"
 #include "qom/object_interfaces.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/reset.h"
 #include "sysemu/kvm.h"
 #include "crypto/secret.h"
 #include "crypto/hash.h"
@@ -66,6 +67,7 @@ typedef struct VMIntrospectionClass {
     OBJECT_CLASS_CHECK(VMIntrospectionClass, (class), TYPE_VM_INTROSPECTION)
 
 static Error *vm_introspection_init(VMIntrospection *i);
+static void disconnect_and_unhook_kvmi(VMIntrospection *i);
 
 static void vmi_machine_ready(Notifier *notifier, void *data)
 {
@@ -85,6 +87,19 @@ static void vmi_machine_ready(Notifier *notifier, void *data)
 static void update_vm_start_time(VMIntrospection *i)
 {
     i->vm_start_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME) / 1000;
+}
+
+static void vmi_reset(void *opaque)
+{
+    VMIntrospection *i = opaque;
+
+    if (i->connected) {
+        info_report("VMI: Reset, closing the socket...");
+    }
+
+    disconnect_and_unhook_kvmi(i);
+
+    update_vm_start_time(i);
 }
 
 static void vmi_complete(UserCreatable *uc, Error **errp)
@@ -124,6 +139,8 @@ static void vmi_complete(UserCreatable *uc, Error **errp)
     ic->uniq = i;
 
     update_vm_start_time(i);
+
+    qemu_register_reset(vmi_reset, i);
 }
 
 static void prop_set_chardev(Object *obj, const char *value, Error **errp)
@@ -253,6 +270,8 @@ static void instance_finalize(Object *obj)
     if (!ic->instance_counter) {
         ic->uniq = NULL;
     }
+
+    qemu_unregister_reset(vmi_reset, i);
 }
 
 static const TypeInfo info = {
