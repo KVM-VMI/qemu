@@ -28,6 +28,7 @@
 
 #include "sysemu/vmi-intercept.h"
 #include "sysemu/vmi-handshake.h"
+#include "mem-introspection.h"
 
 #define HANDSHAKE_TIMEOUT_SEC 10
 #define UNHOOK_TIMEOUT_SEC 60
@@ -41,6 +42,9 @@ typedef struct VMIntrospection {
     Chardev *chr;
     CharBackend sock;
     bool connected;
+
+    char *memsrc_chardevid;
+    MemSourceState *memSource;
 
     char *keyid;
     Object *key;
@@ -185,6 +189,20 @@ static const VMStateDescription vmstate_introspection = {
     }
 };
 
+static void init_mem_introspection(VMIntrospection *i, Error **errp)
+{
+    Object *obj;
+
+    if (i->memsrc_chardevid) {
+        obj = object_new(TYPE_MEM_SOURCE);
+        object_property_set_str(obj, i->memsrc_chardevid, "chardev", errp);
+        object_property_add_child(OBJECT(i), "mem-source", obj, errp);
+        user_creatable_complete(USER_CREATABLE(obj), errp);
+        i->memSource = MEM_SOURCE(obj);
+        object_unref(obj);
+    }
+}
+
 static void vmi_complete(UserCreatable *uc, Error **errp)
 {
     VMIntrospectionClass *ic = VM_INTROSPECTION_CLASS(OBJECT(uc)->class);
@@ -202,6 +220,12 @@ static void vmi_complete(UserCreatable *uc, Error **errp)
 
     i->machine_ready.notify = vmi_machine_ready;
     qemu_add_machine_init_done_notifier(&i->machine_ready);
+
+    init_mem_introspection(i, errp);
+    if (*errp) {
+        /* errp was filled inside init_mem_introspection() */
+        return;
+    }
 
     /*
      * If the introspection object is created while parsing the command line,
@@ -232,6 +256,14 @@ static void vmi_complete(UserCreatable *uc, Error **errp)
     qemu_register_shutdown_notifier(&i->shutdown);
 
     qemu_register_reset(vmi_reset, i);
+}
+
+static void prop_set_memsrc(Object *obj, const char *value, Error **errp)
+{
+    VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    g_free(i->memsrc_chardevid);
+    i->memsrc_chardevid = g_strdup(value);
 }
 
 static void prop_set_chardev(Object *obj, const char *value, Error **errp)
@@ -327,6 +359,7 @@ static void instance_init(Object *obj)
 
     i->created_from_command_line = (qdev_hotplug == false);
 
+    object_property_add_str(obj, "chardev-memsrc", NULL, prop_set_memsrc, NULL);
     object_property_add_str(obj, "chardev", NULL, prop_set_chardev, NULL);
     object_property_add_str(obj, "key", NULL, prop_set_key, NULL);
 
@@ -355,6 +388,13 @@ static void instance_init(Object *obj)
                              prop_set_async_unhook, NULL);
 }
 
+static void disconnect_memsource(VMIntrospection *i)
+{
+    if (i->memSource) {
+        mem_source_disconnect(i->memSource);
+    }
+}
+
 static void disconnect_chardev(VMIntrospection *i)
 {
     if (i->connected) {
@@ -376,6 +416,7 @@ static void unhook_kvmi(VMIntrospection *i)
 static void disconnect_and_unhook_kvmi(VMIntrospection *i)
 {
     disconnect_chardev(i);
+    disconnect_memsource(i);
     unhook_kvmi(i);
 }
 
@@ -411,6 +452,7 @@ static void instance_finalize(Object *obj)
         g_array_free(i->allowed_events, TRUE);
     }
 
+    g_free(i->memsrc_chardevid);
     g_free(i->chardevid);
     g_free(i->keyid);
 
@@ -738,6 +780,20 @@ static void vmi_start_handshake(void *opaque)
     info_report("VMI: handshake started");
 }
 
+/*
+ * We have two sockets: one for introspection and one for remote mapping.
+ * These might be connected to two different "processes".
+ *
+ * We have to wait until the first socket is connected (the introspection
+ * tool is started), connect the remote mapping socket, wait for its
+ * handshake and then do the hanshake for the introspection socket.
+ *
+ * Both handshakes are event-based and running on the main loop:
+ *   - trigger the connection
+ *   - send the data when the socket is connected
+ *   - finish the handshake when enough data is available to be read
+ *     from the socket.
+ */
 static void vmi_chr_event_open(VMIntrospection *i)
 {
     i->connected = true;
@@ -758,7 +814,12 @@ static void vmi_chr_event_open(VMIntrospection *i)
                                            i->handshake_timeout * 1000,
                                            vmi_hsk_timeout, i);
 
-    vmi_start_handshake(i);
+    if (i->memSource) {
+        info_report("VMI: connect memory source first");
+        mem_source_connect(i->memSource, vmi_start_handshake, i);
+    } else {
+        vmi_start_handshake(i);
+    }
 }
 
 static void vmi_chr_event_closed(VMIntrospection *i)
