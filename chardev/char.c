@@ -841,6 +841,9 @@ QemuOptsList qemu_chardev_opts = {
             .name = "host",
             .type = QEMU_OPT_STRING,
         },{
+            .name = "cid",
+            .type = QEMU_OPT_STRING,
+        },{
             .name = "port",
             .type = QEMU_OPT_STRING,
         },{
