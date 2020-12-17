@@ -56,6 +56,7 @@ typedef struct VMIntrospection {
     int intercepted_action;
     GSource *unhook_timer;
     uint32_t unhook_timeout;
+    bool async_unhook;
 
     int reconnect_time;
 
@@ -233,6 +234,20 @@ static void prop_set_key(Object *obj, const char *value, Error **errp)
     i->keyid = g_strdup(value);
 }
 
+static bool prop_get_async_unhook(Object *obj, Error **errp)
+{
+    VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    return i->async_unhook;
+}
+
+static void prop_set_async_unhook(Object *obj, bool value, Error **errp)
+{
+    VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    i->async_unhook = value;
+}
+
 static void prop_get_uint32(Object *obj, Visitor *v, const char *name,
                             void *opaque, Error **errp)
 {
@@ -289,6 +304,11 @@ static void instance_init(Object *obj)
     object_property_add(obj, "unhook_timeout", "uint32",
                         prop_set_uint32, prop_get_uint32,
                         NULL, &i->unhook_timeout, NULL);
+
+    i->async_unhook = true;
+    object_property_add_bool(obj, "async_unhook",
+                             prop_get_async_unhook,
+                             prop_set_async_unhook, NULL);
 }
 
 static void disconnect_chardev(VMIntrospection *i)
@@ -771,6 +791,19 @@ static bool record_intercept_action(VMI_intercept_command action)
     return true;
 }
 
+static void wait_until_the_socket_is_closed(VMIntrospection *i)
+{
+    info_report("VMI: start waiting until socket is closed");
+
+    while (i->connected) {
+        main_loop_wait(false);
+    }
+
+    info_report("VMI: continue with the intercepted action");
+
+    maybe_disable_socket_reconnect(i);
+}
+
 static bool vmi_maybe_wait_for_unhook(VMIntrospection *i,
                                       VMI_intercept_command action)
 {
@@ -782,6 +815,11 @@ static bool vmi_maybe_wait_for_unhook(VMIntrospection *i,
     i->unhook_timer = qemu_chr_timeout_add_ms(i->chr,
                                               i->unhook_timeout * 1000,
                                               unhook_timeout_cbk, i);
+
+    if (!i->async_unhook) {
+        wait_until_the_socket_is_closed(i);
+        return false;
+    }
 
     i->intercepted_action = action;
     return true;
