@@ -4927,7 +4927,7 @@ CN=laptop.example.com,O=Example Home,L=London,ST=London,C=GB
 @end example
 
 
-@item -object introspection,id=@var{id},chardev=@var{id}[,key=@var{id}][,handshake_timeout=@var{seconds}][,unhook_timeout=@var{seconds}][,command=@var{id}[,...]][,event=@var{id}[,...]][,chardev-memintro=@var{id}]
+@item -object introspection,id=@var{id},chardev=@var{id}[,key=@var{id}][,handshake_timeout=@var{seconds}][,unhook_timeout=@var{seconds}][,command=@var{id}[,...]][,event=@var{id}[,...]][[,chardev-memintro=@var{id}]|[,chardev-memsrc=@var{id}]]
 
 Defines a VM Introspection (VMI) object that will connect to
 an introspection tool, initiate the handshake and hand over the connection
@@ -4968,6 +4968,12 @@ The @option{chardev-memintro} parameter provides the memory mapping
 channel for a VM running the introspection tool. This is the id of a
 previously created chardev socket. On this channel, the VM will accept
 memory mapping file descriptors from introspected VMs.
+
+The @option{chardev-memsrc} parameter provides the memory mapping
+channel for an introspected VM. This is the id of a previously created
+chardev socket. On this channel, the introspected VM will send two file
+descriptors that will be used by the introspection tool to map guest
+memory in its own process.
 
 VM introspected using a unix socket:
 @example
@@ -5021,6 +5027,16 @@ memory size no larger than 968GB (1000 - 32) at one time.
      -chardev socket,id=vmi_chardev,type=vsock,cid=1234,port=4321,reconnect=10
      -chardev socket,id=vmi_chardev_mem_intro,type=unix,path=/tmp/vmi-mem.sock,server=on,wait=off
      -object introspection,id=vmi,chardev=vmi_chardev,chardev-memintro=vmi_chardev_mem_intro
+
+@end example
+
+VM introspected with the memory mapping feature enabled:
+@example
+ # $QEMU \
+     ......
+     -chardev socket,id=vmi_chardev,type=unix,path=/tmp/vmi-guest1.sock,reconnect=10
+     -chardev socket,id=vmi_chardev_mem,type=unix,path=/tmp/vmi-mem.sock,disconnected
+     -object introspection,id=vmi,chardev=vmi_chardev,chardev-memsrc=vmi_chardev_mem
 
 @end example
 
