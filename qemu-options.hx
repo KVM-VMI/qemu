@@ -4927,7 +4927,7 @@ CN=laptop.example.com,O=Example Home,L=London,ST=London,C=GB
 @end example
 
 
-@item -object introspection,id=@var{id},chardev=@var{id}[,key=@var{id}][,handshake_timeout=@var{seconds}][,unhook_timeout=@var{seconds}][,command=@var{id}[,...]][,event=@var{id}[,...]]
+@item -object introspection,id=@var{id},chardev=@var{id}[,key=@var{id}][,handshake_timeout=@var{seconds}][,unhook_timeout=@var{seconds}][,command=@var{id}[,...]][,event=@var{id}[,...]][,chardev-memintro=@var{id}]
 
 Defines a VM Introspection (VMI) object that will connect to
 an introspection tool, initiate the handshake and hand over the connection
@@ -4964,6 +4964,11 @@ are allowed. For example, ``event=1,event=3`` will
 allow the introspection tool to receive only two events,
 KVMI_EVENT_PAUSE_VCPU(1) and KVMI_EVENT_BREAKPOINT(3).
 
+The @option{chardev-memintro} parameter provides the memory mapping
+channel for a VM running the introspection tool. This is the id of a
+previously created chardev socket. On this channel, the VM will accept
+memory mapping file descriptors from introspected VMs.
+
 VM introspected using a unix socket:
 @example
  # $QEMU \
@@ -4998,6 +5003,24 @@ VM running the introspection tool:
  # $QEMU \
      ......
      -device vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=1234
+
+@end example
+
+VM (4 vCPU, 32GB RAM) running the introspection tool with the memory
+mapping feature enabled. The introspection tool will be able to use the
+memory mapping feature on 85 guests (3 slots per guest) with a cumulative
+memory size no larger than 968GB (1000 - 32) at one time.
+@example
+ # $QEMU \
+     ......
+     -object memory-backend-ram,size=32G,id=ram
+     -numa node,nodeid=0,cpus=0-3,memdev=ram
+     -smp 4
+     -m size="32G,slots=255,maxmem=1000G"
+     -device vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=1234
+     -chardev socket,id=vmi_chardev,type=vsock,cid=1234,port=4321,reconnect=10
+     -chardev socket,id=vmi_chardev_mem_intro,type=unix,path=/tmp/vmi-mem.sock,server=on,wait=off
+     -object introspection,id=vmi,chardev=vmi_chardev,chardev-memintro=vmi_chardev_mem_intro
 
 @end example
 
