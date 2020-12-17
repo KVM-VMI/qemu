@@ -20,6 +20,7 @@
 #include "crypto/hash.h"
 #include "chardev/char.h"
 #include "chardev/char-fe.h"
+#include "migration/vmstate.h"
 
 #include "sysemu/vmi-intercept.h"
 #include "sysemu/vmi-handshake.h"
@@ -119,6 +120,16 @@ static void vmi_reset(void *opaque)
     update_vm_start_time(i);
 }
 
+static const VMStateDescription vmstate_introspection = {
+    .name = "vm_introspection",
+    .minimum_version_id = 1,
+    .version_id = 1,
+    .fields = (VMStateField[]) {
+        VMSTATE_INT64(vm_start_time, VMIntrospection),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void vmi_complete(UserCreatable *uc, Error **errp)
 {
     VMIntrospectionClass *ic = VM_INTROSPECTION_CLASS(OBJECT(uc)->class);
@@ -156,6 +167,8 @@ static void vmi_complete(UserCreatable *uc, Error **errp)
     ic->uniq = i;
 
     update_vm_start_time(i);
+
+    vmstate_register(NULL, 0, &vmstate_introspection, i);
 
     qemu_register_reset(vmi_reset, i);
 }
