@@ -317,6 +317,15 @@ void qemu_chr_fe_take_focus(CharBackend *b)
     }
 }
 
+void qemu_chr_fe_connect(CharBackend *be)
+{
+    Chardev *chr = be->chr;
+
+    if (chr && CHARDEV_GET_CLASS(chr)->chr_connect) {
+        CHARDEV_GET_CLASS(chr)->chr_connect(chr);
+    }
+}
+
 int qemu_chr_fe_wait_connected(CharBackend *be, Error **errp)
 {
     if (!be->chr) {

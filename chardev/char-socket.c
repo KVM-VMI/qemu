@@ -466,7 +466,8 @@ static void update_disconnected_filename(SocketChardev *s)
     }
 }
 
-/* NB may be called even if tcp_chr_connect has not been
+/*
+ * NB may be called even if tcp_chr_conn_init has not been
  * reached, due to TLS or telnet initialization failure,
  * so can *not* assume s->state == TCP_CHARDEV_STATE_CONNECTED
  * This must be called with chr->chr_write_lock held.
@@ -616,7 +617,7 @@ static void update_ioc_handlers(SocketChardev *s)
     g_source_attach(s->hup_source, chr->gcontext);
 }
 
-static void tcp_chr_connect(void *opaque)
+static void tcp_chr_conn_init(void *opaque)
 {
     Chardev *chr = CHARDEV(opaque);
     SocketChardev *s = SOCKET_CHARDEV(opaque);
@@ -682,7 +683,7 @@ static gboolean tcp_chr_telnet_init_io(QIOChannel *ioc,
     init->buflen -= ret;
 
     if (init->buflen == 0) {
-        tcp_chr_connect(chr);
+        tcp_chr_conn_init(chr);
         goto end;
     }
 
@@ -763,7 +764,7 @@ static void tcp_chr_websock_handshake(QIOTask *task, gpointer user_data)
         if (s->do_telnetopt) {
             tcp_chr_telnet_init(chr);
         } else {
-            tcp_chr_connect(chr);
+            tcp_chr_conn_init(chr);
         }
     }
 }
@@ -801,7 +802,7 @@ static void tcp_chr_tls_handshake(QIOTask *task,
         } else if (s->do_telnetopt) {
             tcp_chr_telnet_init(chr);
         } else {
-            tcp_chr_connect(chr);
+            tcp_chr_conn_init(chr);
         }
     }
 }
@@ -889,7 +890,7 @@ static int tcp_chr_new_client(Chardev *chr, QIOChannelSocket *sioc)
     } else if (s->do_telnetopt) {
         tcp_chr_telnet_init(chr);
     } else {
-        tcp_chr_connect(chr);
+        tcp_chr_conn_init(chr);
     }
 
     return 0;
@@ -1153,6 +1154,14 @@ static gboolean socket_reconnect_timeout(gpointer opaque)
     return false;
 }
 
+static void tcp_chr_connect(Chardev *chr)
+{
+    SocketChardev *s = SOCKET_CHARDEV(chr);
+
+    if (s->state == TCP_CHARDEV_STATE_DISCONNECTED)
+        tcp_chr_connect_client_async(chr);
+}
+
 
 static int qmp_chardev_open_socket_server(Chardev *chr,
                                           bool is_telnet,
@@ -1268,6 +1277,12 @@ static bool qmp_chardev_validate_socket(ChardevSocket *sock,
                        "socket in server listen mode");
             return false;
         }
+        if (sock->has_disconnected) {
+            error_setg(errp,
+                       "'disconnected' option is incompatible with "
+                       "socket in server listen mode");
+            return false;
+        }
     } else {
         if (sock->has_websocket && sock->websocket) {
             error_setg(errp, "%s", "Websocket client is not implemented");
@@ -1366,7 +1381,7 @@ static void qmp_chardev_open_socket(Chardev *chr,
                                            is_waitconnect, errp) < 0) {
             return;
         }
-    } else {
+    } else if (!sock->disconnected) {
         if (qmp_chardev_open_socket_client(chr, reconnect, errp) < 0) {
             return;
         }
@@ -1424,6 +1439,8 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     sock->tls_creds = g_strdup(qemu_opt_get(opts, "tls-creds"));
     sock->has_tls_authz = qemu_opt_get(opts, "tls-authz");
     sock->tls_authz = g_strdup(qemu_opt_get(opts, "tls-authz"));
+    sock->has_disconnected = qemu_opt_get(opts, "disconnected");
+    sock->disconnected = qemu_opt_get_bool(opts, "disconnected", false);
 
     addr = g_new0(SocketAddressLegacy, 1);
     if (path) {
@@ -1490,6 +1507,7 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
 
     cc->parse = qemu_chr_parse_socket;
     cc->open = qmp_chardev_open_socket;
+    cc->chr_connect = tcp_chr_connect;
     cc->chr_wait_connected = tcp_chr_wait_connected;
     cc->chr_write = tcp_chr_write;
     cc->chr_sync_read = tcp_chr_sync_read;

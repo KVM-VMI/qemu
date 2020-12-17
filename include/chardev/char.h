@@ -268,6 +268,7 @@ typedef struct ChardevClass {
     int (*get_msgfds)(Chardev *s, int* fds, int num);
     int (*set_msgfds)(Chardev *s, int *fds, int num);
     int (*chr_add_client)(Chardev *chr, int fd);
+    void (*chr_connect)(Chardev *chr);
     int (*chr_wait_connected)(Chardev *chr, Error **errp);
     void (*chr_disconnect)(Chardev *chr);
     int (*chr_reconnect_time)(Chardev *be, int secs);
