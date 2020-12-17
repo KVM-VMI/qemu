@@ -10,6 +10,7 @@
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qapi/error.h"
+#include "qapi/qmp/qdict.h"
 #include "qemu/error-report.h"
 #include "qom/object_interfaces.h"
 #include "sysemu/sysemu.h"
@@ -22,6 +23,8 @@
 #include "chardev/char-fe.h"
 #include "migration/vmstate.h"
 #include "migration/misc.h"
+#include "qapi/qmp/qobject.h"
+#include "monitor/monitor.h"
 
 #include "sysemu/vmi-intercept.h"
 #include "sysemu/vmi-handshake.h"
@@ -61,6 +64,9 @@ typedef struct VMIntrospection {
     Notifier machine_ready;
     Notifier migration_state_change;
     bool created_from_command_line;
+
+    void *qmp_monitor;
+    QDict *qmp_rsp;
 
     bool kvmi_hooked;
 } VMIntrospection;
@@ -346,6 +352,8 @@ static void instance_finalize(Object *obj)
 
     error_free(i->init_error);
 
+    qobject_unref(i->qmp_rsp);
+
     ic->instance_counter--;
     if (!ic->instance_counter) {
         ic->uniq = NULL;
@@ -527,6 +535,12 @@ static void continue_with_the_intercepted_action(VMIntrospection *i)
 
     info_report("VMI: continue with '%s'",
                 action_string[i->intercepted_action]);
+
+    if (i->qmp_rsp) {
+        monitor_qmp_respond_later(i->qmp_monitor, i->qmp_rsp);
+        i->qmp_monitor = NULL;
+        i->qmp_rsp = NULL;
+    }
 }
 
 /*
@@ -711,6 +725,21 @@ static VMIntrospection *vm_introspection_object(void)
     ic = VM_INTROSPECTION_CLASS(object_class_by_name(TYPE_VM_INTROSPECTION));
 
     return ic ? ic->uniq : NULL;
+}
+
+bool vm_introspection_qmp_delay(void *mon, QDict *rsp)
+{
+    VMIntrospection *i = vm_introspection_object();
+    bool intercepted;
+
+    intercepted = i && i->intercepted_action == VMI_INTERCEPT_SUSPEND;
+
+    if (intercepted) {
+        i->qmp_monitor = mon;
+        i->qmp_rsp = rsp;
+    }
+
+    return intercepted;
 }
 
 /*
