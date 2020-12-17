@@ -146,11 +146,19 @@ static void prop_set_uint32(Object *obj, Visitor *v, const char *name,
     }
 }
 
+static bool vmi_can_be_deleted(UserCreatable *uc)
+{
+    VMIntrospection *i = VM_INTROSPECTION(uc);
+
+    return !i->connected;
+}
+
 static void class_init(ObjectClass *oc, void *data)
 {
     UserCreatableClass *uc = USER_CREATABLE_CLASS(oc);
 
     uc->complete = vmi_complete;
+    uc->can_be_deleted = vmi_can_be_deleted;
 }
 
 static void instance_init(Object *obj)
