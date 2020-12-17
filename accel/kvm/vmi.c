@@ -46,6 +46,9 @@ typedef struct VMIntrospection {
     char *memsrc_chardevid;
     MemSourceState *memSource;
 
+    char *memintro_chardevid;
+    MemIntrospectionState *memIntro;
+
     char *keyid;
     Object *key;
     uint8_t cookie_hash[QEMU_VMI_COOKIE_HASH_SIZE];
@@ -193,12 +196,26 @@ static void init_mem_introspection(VMIntrospection *i, Error **errp)
 {
     Object *obj;
 
+    if (i->memsrc_chardevid && i->memintro_chardevid) {
+        error_setg(errp, "VMI: can't have both mem source & introspection");
+        return;
+    }
+
     if (i->memsrc_chardevid) {
         obj = object_new(TYPE_MEM_SOURCE);
         object_property_set_str(obj, i->memsrc_chardevid, "chardev", errp);
         object_property_add_child(OBJECT(i), "mem-source", obj, errp);
         user_creatable_complete(USER_CREATABLE(obj), errp);
         i->memSource = MEM_SOURCE(obj);
+        object_unref(obj);
+    }
+
+    if (i->memintro_chardevid) {
+        obj = object_new(TYPE_MEM_INTROSPECTION);
+        object_property_set_str(obj, i->memintro_chardevid, "chardev", errp);
+        object_property_add_child(OBJECT(i), "mem-introspection", obj, errp);
+        user_creatable_complete(USER_CREATABLE(obj), errp);
+        i->memIntro = MEM_INTROSPECTION(obj);
         object_unref(obj);
     }
 }
@@ -264,6 +281,14 @@ static void prop_set_memsrc(Object *obj, const char *value, Error **errp)
 
     g_free(i->memsrc_chardevid);
     i->memsrc_chardevid = g_strdup(value);
+}
+
+static void prop_set_memintro(Object *obj, const char *value, Error **errp)
+{
+    VMIntrospection *i = VM_INTROSPECTION(obj);
+
+    g_free(i->memintro_chardevid);
+    i->memintro_chardevid = g_strdup(value);
 }
 
 static void prop_set_chardev(Object *obj, const char *value, Error **errp)
@@ -360,6 +385,8 @@ static void instance_init(Object *obj)
     i->created_from_command_line = (qdev_hotplug == false);
 
     object_property_add_str(obj, "chardev-memsrc", NULL, prop_set_memsrc, NULL);
+    object_property_add_str(obj, "chardev-memintro", NULL, prop_set_memintro,
+                            NULL);
     object_property_add_str(obj, "chardev", NULL, prop_set_chardev, NULL);
     object_property_add_str(obj, "key", NULL, prop_set_key, NULL);
 
@@ -452,6 +479,7 @@ static void instance_finalize(Object *obj)
         g_array_free(i->allowed_events, TRUE);
     }
 
+    g_free(i->memintro_chardevid);
     g_free(i->memsrc_chardevid);
     g_free(i->chardevid);
     g_free(i->keyid);
@@ -1080,4 +1108,68 @@ static Error *vm_introspection_init(VMIntrospection *i)
     }
 
     return NULL;
+}
+
+void vm_introspection_handle_exit(CPUState *cs,
+                                  struct kvm_introspection_exit *kvmi)
+{
+    VMIntrospection *i = vm_introspection_object();
+    MemIntrospectionState *mi = i ? i->memIntro : NULL;
+    Error *err = NULL;
+
+    if (!mi) {
+        warn_report("VMI: memory introspection object not available");
+        return;
+    }
+
+    switch (kvmi->type) {
+    case KVM_EXIT_INTROSPECTION_START:
+        mem_introspection_start(mi, (const QemuUUID *) &kvmi->kvmi_start.uuid,
+                                cs, &err);
+        break;
+
+    case KVM_EXIT_INTROSPECTION_MAP:
+        mem_introspection_map(mi, (const QemuUUID *) &kvmi->kvmi_map.uuid,
+                              kvmi->kvmi_map.gpa, kvmi->kvmi_map.len,
+                              kvmi->kvmi_map.min, cs, &err);
+        break;
+
+    case KVM_EXIT_INTROSPECTION_UNMAP:
+        mem_introspection_unmap(mi, (const QemuUUID *) &kvmi->kvmi_unmap.uuid,
+                                kvmi->kvmi_unmap.gpa, cs, &err);
+        break;
+
+    case KVM_EXIT_INTROSPECTION_END:
+        mem_introspection_end(mi, (const QemuUUID *) &kvmi->kvmi_end.uuid, cs,
+                              &err);
+        break;
+
+    default:
+        warn_report("invalid introspection request (%lld)", kvmi->type);
+        break;
+    }
+
+    if (err) {
+        error_report_err(err);
+    }
+}
+
+bool vm_introspection_remap(CPUState *cs, hwaddr paddr)
+{
+    VMIntrospection *i = vm_introspection_object();
+    MemIntrospectionState *mi = i ? i->memIntro : NULL;
+    Error *err = NULL;
+    bool result;
+
+    if (!mi)
+        return false;
+
+    result = mem_introspection_remap(mi, (uint64_t)paddr, cs, &err);
+
+    if (err) {
+        error_report_err(err);
+        return false;
+    }
+
+    return result;
 }

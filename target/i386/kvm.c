@@ -29,6 +29,7 @@
 #include "kvm_i386.h"
 #include "hyperv.h"
 #include "hyperv-proto.h"
+#include "sysemu/vmi-intercept.h"
 
 #include "exec/gdbstub.h"
 #include "qemu/host-utils.h"
@@ -643,6 +644,10 @@ void kvm_arch_on_sigbus_vcpu(CPUState *c, int code, void *addr)
         ram_addr = qemu_ram_addr_from_host(addr);
         if (ram_addr != RAM_ADDR_INVALID &&
             kvm_physical_memory_addr_from_host(c->kvm_state, addr, &paddr)) {
+            if (vm_introspection_remap(c, paddr)) {
+                return;
+            }
+
             kvm_hwpoison_page_add(ram_addr);
             kvm_mce_inject(cpu, paddr, code);
 
@@ -4496,6 +4501,10 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
         break;
     case KVM_EXIT_IOAPIC_EOI:
         ioapic_eoi_broadcast(run->eoi.vector);
+        ret = 0;
+        break;
+    case KVM_EXIT_INTROSPECTION:
+        vm_introspection_handle_exit(cs, &run->kvmi);
         ret = 0;
         break;
     default:
