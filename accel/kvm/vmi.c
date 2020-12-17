@@ -21,6 +21,7 @@
 #include "chardev/char.h"
 #include "chardev/char-fe.h"
 #include "migration/vmstate.h"
+#include "migration/misc.h"
 
 #include "sysemu/vmi-intercept.h"
 #include "sysemu/vmi-handshake.h"
@@ -58,6 +59,7 @@ typedef struct VMIntrospection {
     int64_t vm_start_time;
 
     Notifier machine_ready;
+    Notifier migration_state_change;
     bool created_from_command_line;
 
     bool kvmi_hooked;
@@ -86,6 +88,38 @@ static bool suspend_pending;
 
 static Error *vm_introspection_init(VMIntrospection *i);
 static void disconnect_and_unhook_kvmi(VMIntrospection *i);
+static bool vmi_maybe_wait_for_unhook(VMIntrospection *i,
+                                      VMI_intercept_command action);
+
+static bool vmi_unhook_pending(void *opaque)
+{
+    VMIntrospection *i = opaque;
+    bool pending;
+
+    qemu_mutex_lock_iothread();
+    pending = i->connected;
+    qemu_mutex_unlock_iothread();
+
+    return pending;
+}
+
+static void migration_state_notifier(Notifier *notifier, void *data)
+{
+    MigrationState *s = data;
+    VMIntrospection *i;
+
+    if (migration_in_setup(s)) {
+        qemu_mutex_lock_iothread();
+
+        i = container_of(notifier, VMIntrospection, migration_state_change);
+
+        if (i->connected && i->intercepted_action == VMI_INTERCEPT_NONE) {
+            vmi_maybe_wait_for_unhook(i, VMI_INTERCEPT_MIGRATE);
+        }
+
+        qemu_mutex_unlock_iothread();
+    }
+}
 
 static void vmi_machine_ready(Notifier *notifier, void *data)
 {
@@ -124,6 +158,7 @@ static const VMStateDescription vmstate_introspection = {
     .name = "vm_introspection",
     .minimum_version_id = 1,
     .version_id = 1,
+    .dev_unplug_pending = vmi_unhook_pending,
     .fields = (VMStateField[]) {
         VMSTATE_INT64(vm_start_time, VMIntrospection),
         VMSTATE_END_OF_LIST()
@@ -169,6 +204,9 @@ static void vmi_complete(UserCreatable *uc, Error **errp)
     update_vm_start_time(i);
 
     vmstate_register(NULL, 0, &vmstate_introspection, i);
+
+    i->migration_state_change.notify = migration_state_notifier;
+    add_migration_state_change_notifier(&i->migration_state_change);
 
     qemu_register_reset(vmi_reset, i);
 }
@@ -479,6 +517,8 @@ static void continue_with_the_intercepted_action(VMIntrospection *i)
     case VMI_INTERCEPT_SUSPEND:
         vm_stop(RUN_STATE_PAUSED);
         break;
+    case VMI_INTERCEPT_MIGRATE:
+        break;
     default:
         error_report("VMI: %s: unexpected action %d",
                      __func__, i->intercepted_action);
@@ -595,9 +635,9 @@ static void vmi_chr_event_open(VMIntrospection *i)
 {
     i->connected = true;
 
-    if (suspend_pending) {
-        info_report("VMI: %s: too soon (suspend=%d)",
-                    __func__, suspend_pending);
+    if (suspend_pending || !migration_is_idle()) {
+        info_report("VMI: %s: too soon (suspend=%d, migrate=%d)",
+                    __func__, suspend_pending, !migration_is_idle());
         maybe_disable_socket_reconnect(i);
         qemu_chr_fe_disconnect(&i->sock);
         return;
@@ -626,7 +666,7 @@ static void vmi_chr_event_closed(VMIntrospection *i)
     cancel_unhook_timer(i);
     cancel_handshake_timer(i);
 
-    if (suspend_pending) {
+    if (suspend_pending || !migration_is_idle()) {
         maybe_disable_socket_reconnect(i);
 
         if (i->intercepted_action != VMI_INTERCEPT_NONE) {
