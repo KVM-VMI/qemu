@@ -23,6 +23,7 @@ struct Error
     const char *src, *func;
     int line;
     GString *hint;
+    int os_errno;
 };
 
 Error *error_abort;
@@ -48,7 +49,7 @@ static void error_handle_fatal(Error **errp, Error *err)
 static void error_setv(Error **errp,
                        const char *src, int line, const char *func,
                        ErrorClass err_class, const char *fmt, va_list ap,
-                       const char *suffix)
+                       int os_errno, const char *suffix)
 {
     Error *err;
     int saved_errno = errno;
@@ -69,6 +70,7 @@ static void error_setv(Error **errp,
     err->src = src;
     err->line = line;
     err->func = func;
+    err->os_errno = os_errno;
 
     error_handle_fatal(errp, err);
     *errp = err;
@@ -83,7 +85,7 @@ void error_set_internal(Error **errp,
     va_list ap;
 
     va_start(ap, fmt);
-    error_setv(errp, src, line, func, err_class, fmt, ap, NULL);
+    error_setv(errp, src, line, func, err_class, fmt, ap, 0, NULL);
     va_end(ap);
 }
 
@@ -94,7 +96,8 @@ void error_setg_internal(Error **errp,
     va_list ap;
 
     va_start(ap, fmt);
-    error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap, NULL);
+    error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap, 0,
+               NULL);
     va_end(ap);
 }
 
@@ -107,7 +110,7 @@ void error_setg_errno_internal(Error **errp,
 
     va_start(ap, fmt);
     error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap,
-               os_errno != 0 ? strerror(os_errno) : NULL);
+               os_errno, os_errno != 0 ? strerror(os_errno) : NULL);
     va_end(ap);
 
     errno = saved_errno;
@@ -186,7 +189,7 @@ void error_setg_win32_internal(Error **errp,
 
     va_start(ap, fmt);
     error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR,
-               fmt, ap, suffix);
+               fmt, ap, 0, suffix);
     va_end(ap);
 
     g_free(suffix);
@@ -219,6 +222,11 @@ ErrorClass error_get_class(const Error *err)
 const char *error_get_pretty(const Error *err)
 {
     return err->msg;
+}
+
+int error_get_errno(const Error *err)
+{
+    return err->os_errno;
 }
 
 void error_report_err(Error *err)
