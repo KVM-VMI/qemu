@@ -588,12 +588,19 @@ static void kvm_mce_inject(X86CPU *cpu, hwaddr paddr, int code)
     uint64_t mcg_status = MCG_STATUS_MCIP;
     int flags = 0;
 
-    if (code == BUS_MCEERR_AR) {
+    switch (code) {
+    case BUS_ADRERR:
+        mcg_status |= MCG_STATUS_RIPV;
+    case BUS_MCEERR_AR:
         status |= MCI_STATUS_AR | 0x134;
         mcg_status |= MCG_STATUS_EIPV;
-    } else {
+        break;
+    case BUS_MCEERR_AO:
         status |= 0xc0;
         mcg_status |= MCG_STATUS_RIPV;
+        break;
+    default:
+        assert(false);
     }
 
     flags = cpu_x86_support_mca_broadcast(env) ? MCE_INJECT_BROADCAST : 0;
@@ -622,13 +629,15 @@ void kvm_arch_on_sigbus_vcpu(CPUState *c, int code, void *addr)
     CPUX86State *env = &cpu->env;
     ram_addr_t ram_addr;
     hwaddr paddr;
+    const char *code_str;
 
     /* If we get an action required MCE, it has been injected by KVM
      * while the VM was running.  An action optional MCE instead should
      * be coming from the main thread, which qemu_init_sigbus identifies
      * as the "early kill" thread.
      */
-    assert(code == BUS_MCEERR_AR || code == BUS_MCEERR_AO);
+    assert(code == BUS_MCEERR_AR || code == BUS_MCEERR_AO ||
+           code == BUS_ADRERR);
 
     if ((env->mcg_cap & MCG_SER_P) && addr) {
         ram_addr = qemu_ram_addr_from_host(addr);
@@ -636,6 +645,24 @@ void kvm_arch_on_sigbus_vcpu(CPUState *c, int code, void *addr)
             kvm_physical_memory_addr_from_host(c->kvm_state, addr, &paddr)) {
             kvm_hwpoison_page_add(ram_addr);
             kvm_mce_inject(cpu, paddr, code);
+
+            switch (code) {
+            case BUS_MCEERR_AR:
+                code_str = "BUS_MCEERR_AR";
+                break;
+
+            case BUS_MCEERR_AO:
+                code_str = "BUS_MCEERR_AO";
+                break;
+
+            case BUS_ADRERR:
+                code_str = "BUS_ADRERR";
+                break;
+
+            default:
+                code_str = "<undefined>";
+                break;
+            }
 
             /*
              * Use different logging severity based on error type.
@@ -645,11 +672,11 @@ void kvm_arch_on_sigbus_vcpu(CPUState *c, int code, void *addr)
             if (code == BUS_MCEERR_AR) {
                 error_report("Guest MCE Memory Error at QEMU addr %p and "
                     "GUEST addr 0x%" HWADDR_PRIx " of type %s injected",
-                    addr, paddr, "BUS_MCEERR_AR");
+                    addr, paddr, code_str);
             } else {
                  warn_report("Guest MCE Memory Error at QEMU addr %p and "
                      "GUEST addr 0x%" HWADDR_PRIx " of type %s injected",
-                     addr, paddr, "BUS_MCEERR_AO");
+                     addr, paddr, code_str);
             }
 
             return;
