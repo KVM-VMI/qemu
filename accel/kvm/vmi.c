@@ -64,6 +64,7 @@ typedef struct VMIntrospection {
 
     Notifier machine_ready;
     Notifier migration_state_change;
+    Notifier shutdown;
     bool created_from_command_line;
 
     void *qmp_monitor;
@@ -143,6 +144,13 @@ static void vmi_machine_ready(Notifier *notifier, void *data)
     }
 }
 
+static void vmi_shutdown_notify(Notifier *notifier, void *data)
+{
+    VMIntrospection *i = container_of(notifier, VMIntrospection, shutdown);
+
+    disconnect_and_unhook_kvmi(i);
+}
+
 static void update_vm_start_time(VMIntrospection *i)
 {
     i->vm_start_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME) / 1000;
@@ -214,6 +222,9 @@ static void vmi_complete(UserCreatable *uc, Error **errp)
 
     i->migration_state_change.notify = migration_state_notifier;
     add_migration_state_change_notifier(&i->migration_state_change);
+
+    i->shutdown.notify = vmi_shutdown_notify;
+    qemu_register_shutdown_notifier(&i->shutdown);
 
     qemu_register_reset(vmi_reset, i);
 }
