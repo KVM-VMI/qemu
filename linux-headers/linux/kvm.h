@@ -1577,18 +1577,18 @@ struct kvm_introspection_hook {
 	__u8 uuid[16];
 };
 
-#define KVM_INTROSPECTION_HOOK    _IOW(KVMIO, 0xc3, struct kvm_introspection_hook)
-#define KVM_INTROSPECTION_UNHOOK  _IO(KVMIO, 0xc4)
+#define KVM_INTROSPECTION_HOOK    _IOW(KVMIO, 0xff, struct kvm_introspection_hook)
+#define KVM_INTROSPECTION_UNHOOK  _IO(KVMIO, 0xfb)
 
 struct kvm_introspection_feature {
 	__u32 allow;
 	__s32 id;
 };
 
-#define KVM_INTROSPECTION_COMMAND _IOW(KVMIO, 0xc5, struct kvm_introspection_feature)
-#define KVM_INTROSPECTION_EVENT   _IOW(KVMIO, 0xc6, struct kvm_introspection_feature)
+#define KVM_INTROSPECTION_COMMAND _IOW(KVMIO, 0xfd, struct kvm_introspection_feature)
+#define KVM_INTROSPECTION_EVENT   _IOW(KVMIO, 0xfc, struct kvm_introspection_feature)
 
-#define KVM_INTROSPECTION_PREUNHOOK  _IO(KVMIO, 0xc7)
+#define KVM_INTROSPECTION_PREUNHOOK  _IO(KVMIO, 0xfe)
 
 #define KVM_INTROSPECTION_MAP     _IOW(KVMIO, 0xfa, __u64)
 
