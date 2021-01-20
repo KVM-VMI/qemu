@@ -147,6 +147,11 @@ const char *error_get_pretty(const Error *err);
 ErrorClass error_get_class(const Error *err);
 
 /*
+ * Get @err's errno code.
+ */
+int error_get_errno(const Error *err);
+
+/*
  * Create a new error object and assign it to *@errp.
  * If @errp is NULL, the error is ignored.  Don't bother creating one
  * then.

@@ -128,12 +128,27 @@ void qemu_chr_fe_take_focus(CharBackend *b);
 void qemu_chr_fe_accept_input(CharBackend *be);
 
 /**
+ * qemu_chr_fe_connect:
+ *
+ * Connect a disconnected character backend.
+ * Without associated Chardev, do nothing.
+ */
+void qemu_chr_fe_connect(CharBackend *be);
+
+/**
  * qemu_chr_fe_disconnect:
  *
  * Close a fd accepted by character backend.
  * Without associated Chardev, do nothing.
  */
 void qemu_chr_fe_disconnect(CharBackend *be);
+
+/**
+ * qemu_chr_fe_reconnect_time:
+ *
+ * Change the reconnect time and return the old value.
+ */
+int qemu_chr_fe_reconnect_time(CharBackend *be, int secs);
 
 /**
  * qemu_chr_fe_wait_connected:

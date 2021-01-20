@@ -841,6 +841,9 @@ QemuOptsList qemu_chardev_opts = {
             .name = "host",
             .type = QEMU_OPT_STRING,
         },{
+            .name = "cid",
+            .type = QEMU_OPT_STRING,
+        },{
             .name = "port",
             .type = QEMU_OPT_STRING,
         },{
@@ -926,6 +929,9 @@ QemuOptsList qemu_chardev_opts = {
             .type = QEMU_OPT_STRING,
         },{
             .name = "logappend",
+            .type = QEMU_OPT_BOOL,
+        },{
+            .name = "disconnected",
             .type = QEMU_OPT_BOOL,
         },
         { /* end of list */ }

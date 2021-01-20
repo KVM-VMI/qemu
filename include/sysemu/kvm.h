@@ -475,6 +475,7 @@ void kvm_set_sigmask_len(KVMState *s, unsigned int sigmask_len);
 #if !defined(CONFIG_USER_ONLY)
 int kvm_physical_memory_addr_from_host(KVMState *s, void *ram_addr,
                                        hwaddr *phys_addr);
+hwaddr kvm_start_of_slot(KVMState *s, hwaddr phys_addr);
 #endif
 
 #endif /* NEED_CPU_H */

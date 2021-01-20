@@ -241,6 +241,39 @@ static KVMSlot *kvm_lookup_matching_slot(KVMMemoryListener *kml,
     return NULL;
 }
 
+static KVMSlot *kvm_lookup_containing_slot(KVMState *s, hwaddr phys_addr)
+{
+    KVMMemoryListener *kml = &s->memory_listener;
+    int i;
+
+    for (i = 0; i < s->nr_slots; i++) {
+        KVMSlot *mem = &kml->slots[i];
+
+        if (mem->start_addr <= phys_addr &&
+            phys_addr < mem->start_addr + mem->memory_size) {
+            return mem;
+        }
+    }
+
+    return NULL;
+}
+
+hwaddr kvm_start_of_slot(KVMState *s, hwaddr phys_addr)
+{
+    KVMMemoryListener *kml = &s->memory_listener;
+    KVMSlot *mem;
+    hwaddr start = (hwaddr) -1;
+
+    kvm_slots_lock(kml);
+    mem = kvm_lookup_containing_slot(s, phys_addr);
+    if (mem) {
+        start = mem->start_addr;
+    }
+    kvm_slots_unlock(kml);
+
+    return start;
+}
+
 /*
  * Calculate and align the start address and the size of the section.
  * Return the size. If the size is 0, the aligned section is empty.

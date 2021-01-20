@@ -317,6 +317,15 @@ void qemu_chr_fe_take_focus(CharBackend *b)
     }
 }
 
+void qemu_chr_fe_connect(CharBackend *be)
+{
+    Chardev *chr = be->chr;
+
+    if (chr && CHARDEV_GET_CLASS(chr)->chr_connect) {
+        CHARDEV_GET_CLASS(chr)->chr_connect(chr);
+    }
+}
+
 int qemu_chr_fe_wait_connected(CharBackend *be, Error **errp)
 {
     if (!be->chr) {
@@ -383,4 +392,15 @@ void qemu_chr_fe_disconnect(CharBackend *be)
     if (chr && CHARDEV_GET_CLASS(chr)->chr_disconnect) {
         CHARDEV_GET_CLASS(chr)->chr_disconnect(chr);
     }
+}
+
+int qemu_chr_fe_reconnect_time(CharBackend *be, int secs)
+{
+    Chardev *chr = be->chr;
+
+    if (chr && CHARDEV_GET_CLASS(chr)->chr_reconnect_time) {
+        return CHARDEV_GET_CLASS(chr)->chr_reconnect_time(chr, secs);
+    }
+
+    return -1;
 }

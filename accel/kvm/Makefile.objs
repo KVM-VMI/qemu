@@ -1,2 +1,5 @@
 obj-y += kvm-all.o
+obj-y += vmi.o
+obj-y += mem-source.o
+obj-y += mem-introspection.o
 obj-$(call lnot,$(CONFIG_SEV)) += sev-stub.o

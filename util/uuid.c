@@ -50,19 +50,12 @@ int qemu_uuid_is_equal(const QemuUUID *lhv, const QemuUUID *rhv)
 
 void qemu_uuid_unparse(const QemuUUID *uuid, char *out)
 {
-    const unsigned char *uu = &uuid->data[0];
-    snprintf(out, UUID_FMT_LEN + 1, UUID_FMT,
-             uu[0], uu[1], uu[2], uu[3], uu[4], uu[5], uu[6], uu[7],
-             uu[8], uu[9], uu[10], uu[11], uu[12], uu[13], uu[14], uu[15]);
+    snprintf(out, UUID_FMT_LEN + 1, UUID_FMT, UUID_ARG(uuid));
 }
 
 char *qemu_uuid_unparse_strdup(const QemuUUID *uuid)
 {
-    const unsigned char *uu = &uuid->data[0];
-    return g_strdup_printf(UUID_FMT,
-                           uu[0], uu[1], uu[2], uu[3], uu[4], uu[5], uu[6],
-                           uu[7], uu[8], uu[9], uu[10], uu[11], uu[12],
-                           uu[13], uu[14], uu[15]);
+    return g_strdup_printf(UUID_FMT, UUID_ARG(uuid));
 }
 
 static bool qemu_uuid_is_valid(const char *str)
@@ -115,4 +108,11 @@ QemuUUID qemu_uuid_bswap(QemuUUID uuid)
     bswap16s(&uuid.fields.time_mid);
     bswap16s(&uuid.fields.time_high_and_version);
     return uuid;
+}
+
+QemuUUID *qemu_uuid_dup(const QemuUUID *uuid)
+{
+    QemuUUID *ret = g_malloc(sizeof(QemuUUID));
+    memcpy(ret, uuid, sizeof(QemuUUID));
+    return ret;
 }

@@ -348,5 +348,6 @@
 #define __NR_fspick 433
 #define __NR_pidfd_open 434
 #define __NR_clone3 435
+#define __NR_pidfd_mem 436
 
 #endif /* _ASM_X86_UNISTD_64_H */

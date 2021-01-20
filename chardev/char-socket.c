@@ -23,6 +23,11 @@
  */
 
 #include "qemu/osdep.h"
+
+#ifdef CONFIG_AF_VSOCK
+#include <linux/vm_sockets.h>
+#endif /* CONFIG_AF_VSOCK */
+
 #include "chardev/char.h"
 #include "io/channel-socket.h"
 #include "io/channel-tls.h"
@@ -466,7 +471,8 @@ static void update_disconnected_filename(SocketChardev *s)
     }
 }
 
-/* NB may be called even if tcp_chr_connect has not been
+/*
+ * NB may be called even if tcp_chr_conn_init has not been
  * reached, due to TLS or telnet initialization failure,
  * so can *not* assume s->state == TCP_CHARDEV_STATE_CONNECTED
  * This must be called with chr->chr_write_lock held.
@@ -486,7 +492,7 @@ static void tcp_chr_disconnect_locked(Chardev *chr)
     if (emit_close) {
         qemu_chr_be_event(chr, CHR_EVENT_CLOSED);
     }
-    if (s->reconnect_time) {
+    if (s->reconnect_time && !s->reconnect_timer) {
         qemu_chr_socket_restart_timer(chr);
     }
 }
@@ -590,6 +596,14 @@ static char *qemu_chr_compute_filename(SocketChardev *s)
                                s->is_listen ? ",server" : "",
                                left, phost, right, pserv);
 
+#ifdef CONFIG_AF_VSOCK
+    case AF_VSOCK:
+        return g_strdup_printf("vsock:%d:%d%s",
+                               ((struct sockaddr_vm *)(ss))->svm_cid,
+                               ((struct sockaddr_vm *)(ss))->svm_port,
+                               s->is_listen ? ",server" : "");
+#endif
+
     default:
         return g_strdup_printf("unknown");
     }
@@ -616,7 +630,7 @@ static void update_ioc_handlers(SocketChardev *s)
     g_source_attach(s->hup_source, chr->gcontext);
 }
 
-static void tcp_chr_connect(void *opaque)
+static void tcp_chr_conn_init(void *opaque)
 {
     Chardev *chr = CHARDEV(opaque);
     SocketChardev *s = SOCKET_CHARDEV(opaque);
@@ -682,7 +696,7 @@ static gboolean tcp_chr_telnet_init_io(QIOChannel *ioc,
     init->buflen -= ret;
 
     if (init->buflen == 0) {
-        tcp_chr_connect(chr);
+        tcp_chr_conn_init(chr);
         goto end;
     }
 
@@ -763,7 +777,7 @@ static void tcp_chr_websock_handshake(QIOTask *task, gpointer user_data)
         if (s->do_telnetopt) {
             tcp_chr_telnet_init(chr);
         } else {
-            tcp_chr_connect(chr);
+            tcp_chr_conn_init(chr);
         }
     }
 }
@@ -801,7 +815,7 @@ static void tcp_chr_tls_handshake(QIOTask *task,
         } else if (s->do_telnetopt) {
             tcp_chr_telnet_init(chr);
         } else {
-            tcp_chr_connect(chr);
+            tcp_chr_conn_init(chr);
         }
     }
 }
@@ -889,7 +903,7 @@ static int tcp_chr_new_client(Chardev *chr, QIOChannelSocket *sioc)
     } else if (s->do_telnetopt) {
         tcp_chr_telnet_init(chr);
     } else {
-        tcp_chr_connect(chr);
+        tcp_chr_conn_init(chr);
     }
 
     return 0;
@@ -1153,6 +1167,14 @@ static gboolean socket_reconnect_timeout(gpointer opaque)
     return false;
 }
 
+static void tcp_chr_connect(Chardev *chr)
+{
+    SocketChardev *s = SOCKET_CHARDEV(chr);
+
+    if (s->state == TCP_CHARDEV_STATE_DISCONNECTED)
+        tcp_chr_connect_client_async(chr);
+}
+
 
 static int qmp_chardev_open_socket_server(Chardev *chr,
                                           bool is_telnet,
@@ -1268,6 +1290,12 @@ static bool qmp_chardev_validate_socket(ChardevSocket *sock,
                        "socket in server listen mode");
             return false;
         }
+        if (sock->has_disconnected) {
+            error_setg(errp,
+                       "'disconnected' option is incompatible with "
+                       "socket in server listen mode");
+            return false;
+        }
     } else {
         if (sock->has_websocket && sock->websocket) {
             error_setg(errp, "%s", "Websocket client is not implemented");
@@ -1366,7 +1394,7 @@ static void qmp_chardev_open_socket(Chardev *chr,
                                            is_waitconnect, errp) < 0) {
             return;
         }
-    } else {
+    } else if (!sock->disconnected) {
         if (qmp_chardev_open_socket_client(chr, reconnect, errp) < 0) {
             return;
         }
@@ -1378,18 +1406,19 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
 {
     const char *path = qemu_opt_get(opts, "path");
     const char *host = qemu_opt_get(opts, "host");
+    const char *cid  = qemu_opt_get(opts, "cid");
     const char *port = qemu_opt_get(opts, "port");
     const char *fd = qemu_opt_get(opts, "fd");
     SocketAddressLegacy *addr;
     ChardevSocket *sock;
 
-    if ((!!path + !!fd + !!host) != 1) {
+    if ((!!path + !!fd + !!host + !!cid) != 1) {
         error_setg(errp,
-                   "Exactly one of 'path', 'fd' or 'host' required");
+                   "Exactly one of 'path', 'fd', 'cid' or 'host' required");
         return;
     }
 
-    if (host && !port) {
+    if ((host || cid) && !port) {
         error_setg(errp, "chardev: socket: no port given");
         return;
     }
@@ -1424,6 +1453,8 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     sock->tls_creds = g_strdup(qemu_opt_get(opts, "tls-creds"));
     sock->has_tls_authz = qemu_opt_get(opts, "tls-authz");
     sock->tls_authz = g_strdup(qemu_opt_get(opts, "tls-authz"));
+    sock->has_disconnected = qemu_opt_get(opts, "disconnected");
+    sock->disconnected = qemu_opt_get_bool(opts, "disconnected", false);
 
     addr = g_new0(SocketAddressLegacy, 1);
     if (path) {
@@ -1443,6 +1474,13 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
             .ipv4 = qemu_opt_get_bool(opts, "ipv4", 0),
             .has_ipv6 = qemu_opt_get(opts, "ipv6"),
             .ipv6 = qemu_opt_get_bool(opts, "ipv6", 0),
+        };
+    } else if (cid) {
+        addr->type = SOCKET_ADDRESS_LEGACY_KIND_VSOCK;
+        addr->u.vsock.data = g_new0(VsockSocketAddress, 1);
+        *addr->u.vsock.data = (VsockSocketAddress) {
+            .cid  = g_strdup(cid),
+            .port = g_strdup(port),
         };
     } else if (fd) {
         addr->type = SOCKET_ADDRESS_LEGACY_KIND_FD;
@@ -1471,16 +1509,46 @@ char_socket_get_connected(Object *obj, Error **errp)
     return s->state == TCP_CHARDEV_STATE_CONNECTED;
 }
 
+static void
+char_socket_get_fd(Object *obj, Visitor *v, const char *name, void *opaque,
+                   Error **errp)
+{
+    int fd = -1;
+    SocketChardev *s = SOCKET_CHARDEV(obj);
+    QIOChannelSocket *sock = QIO_CHANNEL_SOCKET(s->sioc);
+
+    if (sock) {
+        fd = sock->fd;
+    }
+
+    visit_type_int32(v, name, &fd, errp);
+}
+
+static int tcp_chr_reconnect_time(Chardev *chr, int secs)
+{
+    SocketChardev *s = SOCKET_CHARDEV(chr);
+
+    int old = s->reconnect_time;
+
+    if (secs >= 0) {
+        s->reconnect_time = secs;
+    }
+
+    return old;
+}
+
 static void char_socket_class_init(ObjectClass *oc, void *data)
 {
     ChardevClass *cc = CHARDEV_CLASS(oc);
 
     cc->parse = qemu_chr_parse_socket;
     cc->open = qmp_chardev_open_socket;
+    cc->chr_connect = tcp_chr_connect;
     cc->chr_wait_connected = tcp_chr_wait_connected;
     cc->chr_write = tcp_chr_write;
     cc->chr_sync_read = tcp_chr_sync_read;
     cc->chr_disconnect = tcp_chr_disconnect;
+    cc->chr_reconnect_time = tcp_chr_reconnect_time;
     cc->get_msgfds = tcp_get_msgfds;
     cc->set_msgfds = tcp_set_msgfds;
     cc->chr_add_client = tcp_chr_add_client;
@@ -1493,6 +1561,9 @@ static void char_socket_class_init(ObjectClass *oc, void *data)
 
     object_class_property_add_bool(oc, "connected", char_socket_get_connected,
                                    NULL, &error_abort);
+
+    object_class_property_add(oc, "fd", "int32", char_socket_get_fd,
+                              NULL, NULL, NULL, &error_abort);
 }
 
 static const TypeInfo char_socket_type_info = {

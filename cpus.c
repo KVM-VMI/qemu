@@ -1159,7 +1159,9 @@ static void sigbus_reraise(void)
 
 static void sigbus_handler(int n, siginfo_t *siginfo, void *ctx)
 {
-    if (siginfo->si_code != BUS_MCEERR_AO && siginfo->si_code != BUS_MCEERR_AR) {
+    if (siginfo->si_code != BUS_MCEERR_AO &&
+        siginfo->si_code != BUS_MCEERR_AR &&
+        siginfo->si_code != BUS_ADRERR) {
         sigbus_reraise();
     }
 

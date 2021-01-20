@@ -204,6 +204,32 @@ struct kvm_hyperv_exit {
 	} u;
 };
 
+struct kvm_introspection_exit {
+#define KVM_EXIT_INTROSPECTION_START	1	/* domain introspection start */
+#define KVM_EXIT_INTROSPECTION_MAP	    2	/* mapping request */
+#define KVM_EXIT_INTROSPECTION_UNMAP	3	/* unmapping request */
+#define KVM_EXIT_INTROSPECTION_END	    4	/* domain introspection end */
+    __u64 type;	/* first! */
+    union {
+        struct {
+            __u8 uuid[16];  /* introspected domain UUID */
+        } kvmi_start;
+        struct {
+            __u8 uuid[16];  /* introspected domain UUID */
+            __u64 gpa;      /* introspected domain GPA */
+            __u64 len;      /* length of memory range */
+            __u64 min;      /* min length accepted for hotplug */
+        } kvmi_map;
+        struct {
+            __u8 uuid[16];  /* introspected domain UUID */
+            __u64 gpa;      /* local GPA */
+        } kvmi_unmap;
+        struct {
+            __u8 uuid[16];  /* introspected domain UUID */
+        } kvmi_end;
+    };
+};
+
 #define KVM_S390_GET_SKEYS_NONE   1
 #define KVM_S390_SKEYS_MAX        1048576
 
@@ -235,6 +261,7 @@ struct kvm_hyperv_exit {
 #define KVM_EXIT_S390_STSI        25
 #define KVM_EXIT_IOAPIC_EOI       26
 #define KVM_EXIT_HYPERV           27
+#define KVM_EXIT_INTROSPECTION    30
 
 /* For KVM_EXIT_INTERNAL_ERROR */
 /* Emulate instruction failed. */
@@ -394,6 +421,8 @@ struct kvm_run {
 		} eoi;
 		/* KVM_EXIT_HYPERV */
 		struct kvm_hyperv_exit hyperv;
+        /* KVM_EXIT_INTROSPECTION */
+        struct kvm_introspection_exit kvmi;
 		/* Fix the size of the union. */
 		char padding[256];
 	};
@@ -1000,6 +1029,7 @@ struct kvm_ppc_resize_hpt {
 #define KVM_CAP_PMU_EVENT_FILTER 173
 #define KVM_CAP_ARM_IRQ_LINE_LAYOUT_2 174
 #define KVM_CAP_HYPERV_DIRECT_TLBFLUSH 175
+#define KVM_CAP_INTROSPECTION 180
 
 #ifdef KVM_CAP_IRQ_ROUTING
 
@@ -1540,6 +1570,27 @@ struct kvm_sev_dbg {
 	__u64 dst_uaddr;
 	__u32 len;
 };
+
+struct kvm_introspection_hook {
+	__s32 fd;
+	__u32 padding;
+	__u8 uuid[16];
+};
+
+#define KVM_INTROSPECTION_HOOK    _IOW(KVMIO, 0xff, struct kvm_introspection_hook)
+#define KVM_INTROSPECTION_UNHOOK  _IO(KVMIO, 0xfb)
+
+struct kvm_introspection_feature {
+	__u32 allow;
+	__s32 id;
+};
+
+#define KVM_INTROSPECTION_COMMAND _IOW(KVMIO, 0xfd, struct kvm_introspection_feature)
+#define KVM_INTROSPECTION_EVENT   _IOW(KVMIO, 0xfc, struct kvm_introspection_feature)
+
+#define KVM_INTROSPECTION_PREUNHOOK  _IO(KVMIO, 0xfe)
+
+#define KVM_INTROSPECTION_MAP     _IOW(KVMIO, 0xfa, __u64)
 
 #define KVM_DEV_ASSIGN_ENABLE_IOMMU	(1 << 0)
 #define KVM_DEV_ASSIGN_PCI_2_3		(1 << 1)
