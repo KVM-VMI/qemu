@@ -1011,7 +1011,7 @@ bool vm_introspection_intercept(VMI_intercept_command action, Error **errp)
     VMIntrospection *i = vm_introspection_object();
     bool intercepted = false;
 
-    if (record_intercept_action(action)) {
+    if (record_intercept_action(action) && i) {
         info_report("VMI: intercept command: %s", action_string[action]);
 
         intercepted = intercept_action(i, action, errp);
