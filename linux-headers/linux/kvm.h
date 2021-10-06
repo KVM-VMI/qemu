@@ -261,7 +261,7 @@ struct kvm_introspection_exit {
 #define KVM_EXIT_S390_STSI        25
 #define KVM_EXIT_IOAPIC_EOI       26
 #define KVM_EXIT_HYPERV           27
-#define KVM_EXIT_INTROSPECTION    30
+#define KVM_EXIT_INTROSPECTION    36
 
 /* For KVM_EXIT_INTERNAL_ERROR */
 /* Emulate instruction failed. */
@@ -1029,7 +1029,7 @@ struct kvm_ppc_resize_hpt {
 #define KVM_CAP_PMU_EVENT_FILTER 173
 #define KVM_CAP_ARM_IRQ_LINE_LAYOUT_2 174
 #define KVM_CAP_HYPERV_DIRECT_TLBFLUSH 175
-#define KVM_CAP_INTROSPECTION 180
+#define KVM_CAP_INTROSPECTION 206
 
 #ifdef KVM_CAP_IRQ_ROUTING
 
@@ -1577,18 +1577,18 @@ struct kvm_introspection_hook {
 	__u8 uuid[16];
 };
 
-#define KVM_INTROSPECTION_HOOK    _IOW(KVMIO, 0xff, struct kvm_introspection_hook)
-#define KVM_INTROSPECTION_UNHOOK  _IO(KVMIO, 0xfb)
+#define KVM_INTROSPECTION_HOOK    _IOW(KVMIO, 0xc8, struct kvm_introspection_hook)
+#define KVM_INTROSPECTION_UNHOOK  _IO(KVMIO, 0xc9)
 
 struct kvm_introspection_feature {
 	__u32 allow;
 	__s32 id;
 };
 
-#define KVM_INTROSPECTION_COMMAND _IOW(KVMIO, 0xfd, struct kvm_introspection_feature)
-#define KVM_INTROSPECTION_EVENT   _IOW(KVMIO, 0xfc, struct kvm_introspection_feature)
+#define KVM_INTROSPECTION_COMMAND _IOW(KVMIO, 0xca, struct kvm_introspection_feature)
+#define KVM_INTROSPECTION_EVENT   _IOW(KVMIO, 0xcb, struct kvm_introspection_feature)
 
-#define KVM_INTROSPECTION_PREUNHOOK  _IO(KVMIO, 0xfe)
+#define KVM_INTROSPECTION_PREUNHOOK  _IO(KVMIO, 0xcc)
 
 #define KVM_INTROSPECTION_MAP     _IOW(KVMIO, 0xfa, __u64)
 
