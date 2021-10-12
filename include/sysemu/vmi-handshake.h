@@ -25,6 +25,7 @@ typedef struct qemu_vmi_to_introspector {
     uint32_t padding;
     int64_t  start_time;
     char     name[QEMU_VMI_NAME_SIZE];
+    uint64_t max_gpa;
     /* ... */
 } qemu_vmi_to_introspector;
 

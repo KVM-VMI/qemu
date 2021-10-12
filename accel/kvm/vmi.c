@@ -25,6 +25,7 @@
 #include "migration/misc.h"
 #include "qapi/qmp/qobject.h"
 #include "monitor/monitor.h"
+#include "hw/i386/e820_memory_layout.h"
 
 #include "sysemu/vmi-intercept.h"
 #include "sysemu/vmi-handshake.h"
@@ -524,6 +525,24 @@ static void register_types(void)
 
 type_init(register_types);
 
+static uint64_t max_gpa(void)
+{
+    uint64_t max = 0;
+    int i;
+
+    for (i = 0; i < e820_get_num_entries(); i++) {
+        uint64_t addr, len;
+
+        if (e820_get_entry(i, E820_RAM, &addr, &len)) {
+            if (len && addr + len > max) {
+                max = addr + len;
+            }
+        }
+    }
+
+    return max;
+}
+
 static bool send_handshake_info(VMIntrospection *i, Error **errp)
 {
     qemu_vmi_to_introspector send = {};
@@ -538,6 +557,7 @@ static bool send_handshake_info(VMIntrospection *i, Error **errp)
         snprintf(send.name, sizeof(send.name), "%s", vm_name);
         send.name[sizeof(send.name) - 1] = 0;
     }
+    send.max_gpa = max_gpa();
 
     r = qemu_chr_fe_write_all(&i->sock, (uint8_t *)&send, sizeof(send));
     if (r != sizeof(send)) {
