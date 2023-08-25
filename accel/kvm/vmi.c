@@ -25,6 +25,8 @@
 #include "migration/misc.h"
 #include "qapi/qmp/qobject.h"
 #include "monitor/monitor.h"
+#include "exec/address-spaces.h"
+#include "qemu/units.h"
 
 #include "sysemu/vmi-intercept.h"
 #include "sysemu/vmi-handshake.h"
@@ -81,6 +83,9 @@ typedef struct VMIntrospection {
 
     GArray *allowed_commands;
     GArray *allowed_events;
+
+    GHashTable *alloc_gfns;
+    QemuThread *alloc_thread;
 } VMIntrospection;
 
 typedef struct VMIntrospectionClass {
@@ -367,6 +372,14 @@ static bool vmi_can_be_deleted(UserCreatable *uc)
     return !i->connected;
 }
 
+static void gfn_free(gpointer value)
+{
+    MemoryRegion *ram = value;
+    memory_region_del_subregion(get_system_memory(), ram);
+
+    object_unparent(OBJECT(ram));
+}
+
 static void class_init(ObjectClass *oc, void *data)
 {
     UserCreatableClass *uc = USER_CREATABLE_CLASS(oc);
@@ -413,6 +426,8 @@ static void instance_init(Object *obj)
     object_property_add_bool(obj, "async_unhook",
                              prop_get_async_unhook,
                              prop_set_async_unhook, NULL);
+
+    i->alloc_gfns = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, gfn_free);
 }
 
 static void disconnect_memsource(VMIntrospection *i)
@@ -477,6 +492,10 @@ static void instance_finalize(Object *obj)
     }
     if (i->allowed_events) {
         g_array_free(i->allowed_events, TRUE);
+    }
+
+    if (i->alloc_gfns) {
+        g_hash_table_destroy(i->alloc_gfns);
     }
 
     g_free(i->memintro_chardevid);
@@ -621,6 +640,33 @@ out_err:
     return false;
 }
 
+static gboolean vm_introspection_alloc_gfn(uint64_t gfn);
+static gboolean vm_introspection_free_gfn(uint64_t gfn);
+
+static void* wait_alloc_free_gfn(void *unused)
+{
+    struct kvm_introspection_gfn gfn = { .ret = -1 };
+    int r;
+
+    rcu_register_thread();
+
+    do {
+        gfn.gfn = 0;
+        r = kvm_vcpu_ioctl(first_cpu, KVM_INTROSPECTION_GFN, &gfn);
+        switch (r) {
+        case KVM_INTROSPECTION_GFN_REPLY_ALLOC:
+            gfn.ret = !vm_introspection_alloc_gfn(gfn.gfn);
+            break;
+        case KVM_INTROSPECTION_GFN_REPLY_FREE:
+            gfn.ret = !vm_introspection_free_gfn(gfn.gfn);
+            break;
+        }
+    } while (r >= KVM_INTROSPECTION_GFN_REPLY_WAIT);
+
+    rcu_unregister_thread();
+    return NULL;
+}
+
 static bool connect_kernel(VMIntrospection *i, Error **errp)
 {
     struct kvm_introspection_hook kernel;
@@ -649,6 +695,9 @@ static bool connect_kernel(VMIntrospection *i, Error **errp)
                               i->allowed_events, errp)) {
         goto error;
     }
+
+    i->alloc_thread = g_malloc0(sizeof(QemuThread));
+    qemu_thread_create(i->alloc_thread, i->chardevid, wait_alloc_free_gfn, NULL, QEMU_THREAD_JOINABLE);
 
     info_report("VMI: machine hooked");
     i->kvmi_hooked = true;
@@ -1108,6 +1157,47 @@ static Error *vm_introspection_init(VMIntrospection *i)
     }
 
     return NULL;
+}
+
+static gboolean vm_introspection_alloc_gfn(uint64_t gfn)
+{
+    VMIntrospection *i = vm_introspection_object();
+    qemu_mutex_lock_iothread();
+
+    uint64_t p_address = gfn << TARGET_PAGE_BITS, *key;
+    g_autofree char *region_name = g_strdup_printf("gfn.%lX", p_address);
+    MemoryRegion *sysmem = get_system_memory(), *ram;
+
+    if (memory_region_find(sysmem, p_address, 1 << TARGET_PAGE_BITS).size) {
+        qemu_mutex_unlock_iothread();
+        return false;
+    }
+
+    ram = g_new(MemoryRegion, 1);
+    memory_region_init_ram(ram, NULL, region_name, 1 << TARGET_PAGE_BITS, &error_fatal);
+    memory_region_add_subregion(sysmem, p_address, ram);
+
+    key = g_malloc(sizeof(uint64_t));
+    *key = gfn;
+    g_hash_table_insert(i->alloc_gfns, key, ram);
+
+    qemu_mutex_unlock_iothread();
+    return true;
+}
+
+static gboolean remove_gfn(gpointer key, gpointer value, gpointer user_data)
+{
+    return *(uint64_t*)key == *(uint64_t*)&user_data;
+}
+
+static gboolean vm_introspection_free_gfn(uint64_t gfn)
+{
+    char ret;
+    VMIntrospection *i = vm_introspection_object();
+    qemu_mutex_lock_iothread();
+    ret = !!g_hash_table_foreach_remove(i->alloc_gfns, remove_gfn, (gpointer)gfn);
+    qemu_mutex_unlock_iothread();
+    return ret;
 }
 
 void vm_introspection_handle_exit(CPUState *cs,
